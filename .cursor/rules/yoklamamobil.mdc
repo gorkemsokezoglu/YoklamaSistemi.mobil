@@ -1,0 +1,2605 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+If you are going to add a new function or type to your API operations, look at the endpoint codes, request types, tables created in PostgreSQL and take references from there to determine the correct functions and types.
+
+endpoints:
+
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.schemas.academician import AcademicianCreate, AcademicianOut
+from app.crud import crud_academician as academician_crud
+from app.database import get_db
+from typing import List
+from app.models.models import User, Academician
+from app.utils.auth import get_current_user, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/academicians",
+    tags=["Academicians"]
+)
+
+@router.get("/me", response_model=AcademicianOut)
+async def read_academician_me(
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Giriş yapmış akademisyenin kendi bilgilerini getirir
+    """
+    result = academician_crud.get_academician(db, current_user.id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Akademisyen bulunamadı"
+        )
+    
+    academician, first_name, last_name, email = result
+    return AcademicianOut(
+        user_id=academician.user_id,
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        faculty=academician.faculty,
+        department=academician.department,
+        academician_number=academician.academician_number,
+        created_at=academician.created_at
+    )
+
+@router.post("/", response_model=AcademicianOut)
+def create_academician(academician_data: AcademicianCreate, db: Session = Depends(get_db)):
+    user_data = academician_data.user
+    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already exists")
+
+    user = User(
+        first_name=user_data.first_name,
+        last_name=user_data.last_name,
+        email=user_data.email,
+        password=user_data.password,
+        role="academician"
+    )
+    db.add(user)
+    db.flush()
+
+    academician = Academician(
+        user_id=user.id,
+        faculty=academician_data.faculty,
+        department=academician_data.department,
+        academician_number=academician_data.academician_number
+    )
+    db.add(academician)
+    db.commit()
+    db.refresh(academician)
+    
+    return AcademicianOut(
+        user_id=academician.user_id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        email=user.email,
+        faculty=academician.faculty,
+        department=academician.department,
+        academician_number=academician.academician_number,
+        created_at=academician.created_at
+    )
+
+@router.get("/", response_model=List[AcademicianOut])
+def read_academicians(db: Session = Depends(get_db)):
+    results = academician_crud.get_academicians(db)
+    return [
+        AcademicianOut(
+            user_id=academician.user_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            faculty=academician.faculty,
+            department=academician.department,
+            academician_number=academician.academician_number,
+            created_at=academician.created_at
+        )
+        for academician, first_name, last_name, email in results
+    ]
+
+@router.get("/{user_id}", response_model=AcademicianOut)
+def read_academician(user_id: UUID, db: Session = Depends(get_db)):
+    result = academician_crud.get_academician(db, user_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Academician not found")
+    
+    academician, first_name, last_name, email = result
+    return AcademicianOut(
+        user_id=academician.user_id,
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        faculty=academician.faculty,
+        department=academician.department,
+        academician_number=academician.academician_number,
+        created_at=academician.created_at
+    )
+
+@router.put("/{user_id}", response_model=AcademicianOut)
+def update_academician(user_id: UUID, academician: AcademicianCreate, db: Session = Depends(get_db)):
+    db_academician = academician_crud.update_academician(db, user_id, academician)
+    if db_academician is None:
+        raise HTTPException(status_code=404, detail="Academician not found")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    return AcademicianOut(
+        user_id=db_academician.user_id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        email=user.email,
+        faculty=db_academician.faculty,
+        department=db_academician.department,
+        academician_number=db_academician.academician_number,
+        created_at=db_academician.created_at
+    )
+
+@router.delete("/{user_id}", response_model=AcademicianOut)
+def delete_academician(user_id: UUID, db: Session = Depends(get_db)):
+    db_academician = academician_crud.delete_academician(db, user_id)
+    if db_academician is None:
+        raise HTTPException(status_code=404, detail="Academician not found")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    return AcademicianOut(
+        user_id=db_academician.user_id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        email=user.email,
+        faculty=db_academician.faculty,
+        department=db_academician.department,
+        academician_number=db_academician.academician_number,
+        created_at=db_academician.created_at
+    )
+
+----------
+# app/routers/attendances.py
+import cv2
+# import face_recognition
+import numpy as np
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.models.models import User, Attendance, Course
+from app.schemas import attendance as attendance_schemas
+from app.crud import crud_attendance as attendance_crud
+from app.database import get_db
+from uuid import UUID
+from typing import List
+from datetime import date
+from app.utils.auth import get_current_user, check_student_role, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/attendances",
+    tags=["attendances"]
+)
+
+@router.post("/", response_model=attendance_schemas.AttendanceOut)
+def create_attendance(attendance: attendance_schemas.AttendanceCreate, db: Session = Depends(get_db)):
+    return attendance_crud.create_attendance(db, attendance)
+
+@router.get("/", response_model=List[attendance_schemas.AttendanceOut])
+def read_attendances(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Tüm yoklama kayıtlarını getirir
+    Öğrenci: Sadece kendi kayıtlarını görür
+    Akademisyen: Kendi derslerinin kayıtlarını görür
+    """
+    if current_user.role == "student":
+        return db.query(Attendance).filter(Attendance.student_id == current_user.id).all()
+    elif current_user.role == "academician":
+        return db.query(Attendance).join(Course).filter(Course.academician_id == current_user.id).all()
+    else:
+        return db.query(Attendance).all()
+
+@router.get("/{attendance_id}", response_model=attendance_schemas.AttendanceOut)
+def read_attendance(
+    attendance_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir yoklama kaydını getirir
+    Öğrenci: Sadece kendi kaydını görür
+    Akademisyen: Kendi dersinin kaydını görür
+    """
+    db_attendance = attendance_crud.get_attendance(db, attendance_id)
+    if db_attendance is None:
+        raise HTTPException(status_code=404, detail="Yoklama kaydı bulunamadı")
+
+    # Yetki kontrolü
+    if current_user.role == "student" and db_attendance.student_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu yoklama kaydına erişim yetkiniz yok"
+        )
+    elif current_user.role == "academician":
+        course = db.query(Course).filter(
+            Course.id == db_attendance.course_id,
+            Course.academician_id == current_user.id
+        ).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bu yoklama kaydına erişim yetkiniz yok"
+            )
+
+    return db_attendance
+
+@router.put("/{attendance_id}", response_model=attendance_schemas.AttendanceOut)
+def update_attendance(attendance_id: UUID, attendance: attendance_schemas.AttendanceUpdate, db: Session = Depends(get_db)):
+    db_attendance = attendance_crud.update_attendance(db, attendance_id, attendance)
+    if db_attendance is None:
+        raise HTTPException(status_code=404, detail="Attendance not found")
+    return db_attendance
+
+@router.delete("/{attendance_id}", response_model=attendance_schemas.AttendanceOut)
+def delete_attendance(attendance_id: UUID, db: Session = Depends(get_db)):
+    db_attendance = attendance_crud.delete_attendance(db, attendance_id)
+    if db_attendance is None:
+        raise HTTPException(status_code=404, detail="Attendance not found")
+    return db_attendance
+
+@router.get("/myAttendances/", response_model=List[attendance_schemas.AttendanceOut])
+async def get_my_attendances(
+    course_id: UUID = None,
+    start_date: date = None,
+    end_date: date = None,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin kendi yoklama kayıtlarını getirir
+    """
+    query = db.query(Attendance).filter(Attendance.student_id == current_user.id)
+    
+    if course_id:
+        query = query.filter(Attendance.course_id == course_id)
+    if start_date:
+        query = query.filter(Attendance.date >= start_date)
+    if end_date:
+        query = query.filter(Attendance.date <= end_date)
+        
+    return query.all()
+
+@router.get("/course/{course_id}", response_model=List[attendance_schemas.AttendanceOut])
+async def get_course_attendances(
+    course_id: UUID,
+    start_date: date = None,
+    end_date: date = None,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir dersin yoklama kayıtlarını getirir (Sadece akademisyenler erişebilir)
+    """
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ders bulunamadı veya bu derse erişim yetkiniz yok"
+        )
+    
+    query = db.query(Attendance).filter(Attendance.course_id == course_id)
+    
+    if start_date:
+        query = query.filter(Attendance.date >= start_date)
+    if end_date:
+        query = query.filter(Attendance.date <= end_date)
+        
+    return query.all()
+
+@router.post("/{course_id}", response_model=attendance_schemas.AttendanceOut)
+async def create_attendance(
+    course_id: UUID,
+    attendance: attendance_schemas.AttendanceCreate,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yeni yoklama kaydı oluşturur (Sadece akademisyenler)
+    """
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ders bulunamadı veya bu derse erişim yetkiniz yok"
+        )
+    
+    # Aynı tarihte yoklama var mı kontrol et
+    existing_attendance = db.query(Attendance).filter(
+        Attendance.course_id == course_id,
+        Attendance.student_id == attendance.student_id,
+        Attendance.date == attendance.date
+    ).first()
+    
+    if existing_attendance:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu tarihte zaten yoklama kaydı mevcut"
+        )
+    
+    new_attendance = Attendance(
+        course_id=course_id,
+        student_id=attendance.student_id,
+        date=attendance.date,
+        status=attendance.status
+    )
+    
+    db.add(new_attendance)
+    db.commit()
+    db.refresh(new_attendance)
+    
+    return new_attendance
+
+@router.put("/{attendance_id}", response_model=attendance_schemas.AttendanceOut)
+async def update_attendance(
+    attendance_id: UUID,
+    attendance: attendance_schemas.AttendanceCreate,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yoklama kaydını günceller (Sadece akademisyenler)
+    """
+    db_attendance = db.query(Attendance).filter(Attendance.id == attendance_id).first()
+    
+    if not db_attendance:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Yoklama kaydı bulunamadı"
+        )
+    
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_attendance.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu yoklama kaydını güncelleme yetkiniz yok"
+        )
+    
+    db_attendance.status = attendance.status
+    db_attendance.date = attendance.date
+    
+    db.commit()
+    db.refresh(db_attendance)
+    
+    return db_attendance
+
+@router.delete("/{attendance_id}")
+async def delete_attendance(
+    attendance_id: UUID,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yoklama kaydını siler (Sadece akademisyenler)
+    """
+    db_attendance = db.query(Attendance).filter(Attendance.id == attendance_id).first()
+    
+    if not db_attendance:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Yoklama kaydı bulunamadı"
+        )
+    
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_attendance.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu yoklama kaydını silme yetkiniz yok"
+        )
+    
+    db.delete(db_attendance)
+    db.commit()
+    
+    return {"message": "Yoklama kaydı başarıyla silindi"}
+
+
+
+-----------
+
+# app/routers/auth.py
+from fastapi import APIRouter, HTTPException, Depends, status
+from sqlalchemy.orm import Session
+from datetime import timedelta
+from app.models.models import User, Student, Academician, FaceData
+from app.database import get_db
+from app.schemas.auth import UserCreate, UserResponse, LoginRequest, PasswordChange
+from app.schemas.student import StudentCreate, StudentResponse, FaceDataCreate
+from app.schemas.academician import AcademicianCreate, AcademicianResponse
+from app.services.face_capture_service import FaceCaptureService
+from app.utils.auth import (
+    verify_password,
+    create_access_token,
+    get_password_hash,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    get_current_user
+)
+from typing import Union
+
+router = APIRouter(
+    prefix="/api/v1/auth",
+    tags=["Authentication"]
+)
+
+@router.post("/token")
+async def login_for_access_token(
+    login_data: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Kullanıcı girişi yaparak access token alır
+    """
+    user = db.query(User).filter(User.email == login_data.email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Geçersiz email veya şifre",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Şifre kontrolü - hem hash'lenmiş hem de hash'lenmemiş şifreleri kontrol et
+    is_password_valid = False
+    try:
+        # Önce hash'lenmiş şifre kontrolü
+        is_password_valid = verify_password(login_data.password, user.password)
+    except:
+        # Hash'lenmemiş şifre kontrolü
+        is_password_valid = (login_data.password == user.password)
+        if is_password_valid:
+            # Şifreyi hash'le ve güncelle
+            user.password = get_password_hash(login_data.password)
+            db.commit()
+
+    if not is_password_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Geçersiz email veya şifre",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user.id)},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role
+    }
+
+@router.post("/register", response_model=Union[StudentResponse, AcademicianResponse])
+async def register(
+    user_data: Union[StudentCreate, AcademicianCreate],
+    db: Session = Depends(get_db)
+):
+    """
+    Yeni kullanıcı kaydı oluşturur. Öğrenci ise yüz verilerini kaydeder.
+    """
+    try:
+        # Email kontrolü
+        existing_user = db.query(User).filter(User.email == user_data.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bu email adresi zaten kayıtlı"
+            )
+
+        # Şifreyi hashle
+        hashed_password = get_password_hash(user_data.password)
+
+        # 1. Kullanıcı oluştur
+        user = User(
+            first_name=user_data.first_name,
+            last_name=user_data.last_name,
+            email=user_data.email,
+            password=hashed_password,
+            role=user_data.role
+        )
+        db.add(user)
+        db.flush()
+
+        # 2. Rol bazlı kayıt işlemi
+        if user_data.role == "student":
+            # Öğrenci kaydı
+            new_student = Student(
+                user_id=user.id,
+                faculty=user_data.faculty,
+                department=user_data.department,
+                student_number=user_data.student_number
+            )
+            db.add(new_student)
+            db.flush()  # student.id'yi almak için flush yapıyoruz
+            
+            # Yüz verilerini kaydet
+            if hasattr(user_data, 'face_data'):
+                for face_data in user_data.face_data:
+                    face_image_bytes = face_data.get_face_image_bytes()
+                    new_face_data = FaceData(
+                        student_id=new_student.user_id,
+                        face_image=face_image_bytes
+                    )
+                    db.add(new_face_data)
+            
+            db.commit()
+            
+            return StudentResponse(
+                user_id=new_student.user_id,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email=user.email,
+                faculty=new_student.faculty,
+                department=new_student.department,
+                student_number=new_student.student_number,
+                role=user.role
+            )
+
+        elif user_data.role == "academician":
+            # Akademisyen kaydı
+            new_academician = Academician(
+                user_id=user.id,
+                faculty=user_data.faculty,
+                department=user_data.department,
+                academician_number=user_data.academician_number
+            )
+            db.add(new_academician)
+            db.commit()
+            
+            return AcademicianResponse(
+                user_id=new_academician.user_id,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email=user.email,
+                faculty=new_academician.faculty,
+                department=new_academician.department,
+                academician_number=new_academician.academician_number,
+                role=user.role
+            )
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.post("/change-password")
+async def change_password(
+    password_data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Kullanıcının şifresini değiştirir
+    """
+    # Mevcut şifreyi kontrol et
+    is_password_valid = verify_password(password_data.current_password, current_user.password)
+    if not is_password_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mevcut şifre yanlış"
+        )
+
+    # Yeni şifre ve onay şifresinin eşleştiğini kontrol et
+    if password_data.new_password != password_data.confirm_new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Yeni şifre ve onay şifresi eşleşmiyor"
+        )
+
+    # Yeni şifreyi hash'le ve güncelle
+    current_user.password = get_password_hash(password_data.new_password)
+    db.commit()
+
+    return {"message": "Şifreniz başarıyla değiştirildi"}
+
+@router.post("/logout")
+async def logout(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Kullanıcı çıkış işlemi
+    """
+    return {
+        "message": "Başarıyla çıkış yapıldı",
+        "user_email": current_user.email
+    }
+----------------
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List
+from uuid import UUID
+from app.database import get_db
+from app.crud import crud_courseSchedule
+from app.schemas.courseSchedule import CourseSchedule, CourseScheduleCreate, CourseScheduleUpdate
+
+router = APIRouter(
+    prefix="/api/v1/course-schedules",
+    tags=["Course Schedules"]
+)
+
+@router.get("/", response_model=List[CourseSchedule])
+def read_course_schedules(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    schedules = crud_courseSchedule.get_course_schedules(db, skip=skip, limit=limit)
+    return schedules
+
+@router.get("/course/{course_id}", response_model=List[CourseSchedule])
+def read_course_schedules_by_course(course_id: UUID, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    schedules = crud_courseSchedule.get_course_schedules_by_course(db, course_id=course_id, skip=skip, limit=limit)
+    return schedules
+
+@router.get("/{schedule_id}", response_model=CourseSchedule)
+def read_course_schedule(schedule_id: UUID, db: Session = Depends(get_db)):
+    db_schedule = crud_courseSchedule.get_course_schedule(db, schedule_id=schedule_id)
+    if db_schedule is None:
+        raise HTTPException(status_code=404, detail="Course schedule not found")
+    return db_schedule
+
+----------------------
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from uuid import UUID
+from typing import List
+from datetime import datetime
+
+from app.database import get_db
+from app.crud import crud_courseSelectionAcademician as course_selection_academician_crud
+from app.models.models import Course, CourseSelectionAcademician
+from app.schemas.course_selection_academician import (
+    CourseSelectionAcademicianCreate,
+    CourseSelectionAcademicianOut
+)
+
+router = APIRouter(
+    prefix="/api/v1/course-selections-academicians",
+    tags=["Course Selection - Academicians"]
+)
+
+@router.post("/", response_model=CourseSelectionAcademicianOut, status_code=status.HTTP_201_CREATED)
+def create_selection(
+    selection: CourseSelectionAcademicianCreate,
+    db: Session = Depends(get_db)
+):
+    return course_selection_academician_crud.create_course_selection_academician(db, selection)
+
+@router.get("/{selection_id}", response_model=CourseSelectionAcademicianOut)
+def get_selection(
+    selection_id: UUID,
+    db: Session = Depends(get_db)
+):
+    selection = course_selection_academician_crud.get_course_selection_academician(db, selection_id)
+    if not selection:
+        raise HTTPException(status_code=404, detail="Selection not found")
+    return selection
+
+@router.get("/", response_model=List[CourseSelectionAcademicianOut])
+def list_selections(
+    db: Session = Depends(get_db)
+):
+    return course_selection_academician_crud.get_all_course_selections_academicians(db)
+
+@router.put("/{selection_id}", response_model=CourseSelectionAcademicianOut)
+def update_selection(
+    selection_id: UUID,
+    is_approved: bool,
+    reviewed_at: datetime,
+    db: Session = Depends(get_db)
+):
+    updated = course_selection_academician_crud.update_course_selection_academician(
+        db, selection_id, is_approved=is_approved, reviewed_at=reviewed_at
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Selection not found")
+    return updated
+
+@router.delete("/{selection_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_selection(
+    selection_id: UUID,
+    db: Session = Depends(get_db)
+):
+    success = course_selection_academician_crud.delete_course_selection_academician(db, selection_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Selection not found")
+    
+-------------------------------
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.schemas import course_selection_student as course_selection_student_schemas
+from app.crud import crud_courseSelectionStudent as course_selection_student_crud
+from app.database import get_db
+from uuid import UUID
+from typing import List
+from app.models.models import User, Course
+from app.utils.auth import get_current_user, check_student_role, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/course-selections-student",
+    tags=["Course Selections Student"]
+)
+
+@router.post("/", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def create_course_selection_student(
+    course_selection: course_selection_student_schemas.CourseSelectionStudentCreate, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin ders seçimi oluşturması (Sadece kendi için, birden fazla ders seçebilir)
+    """
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendiniz için ders seçimi yapabilirsiniz"
+        )
+
+    # Derslerin var olup olmadığını kontrol et
+    for course_id in course_selection.course_ids:
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Ders bulunamadı: {course_id}"
+            )
+
+    # Aynı dersi tekrar seçmediğinden emin ol
+    existing_selections = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+    existing_course_ids = {str(selection.course_id) for selection in existing_selections}
+    
+    for course_id in course_selection.course_ids:
+        if str(course_id) in existing_course_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bu dersi zaten seçmişsiniz: {course_id}"
+            )
+
+    return course_selection_student_crud.create_multiple_course_selections(
+        db, 
+        course_selection.student_id, 
+        course_selection.course_ids
+    )
+
+@router.get("/my-selections", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def read_my_course_selections(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin kendi ders seçimlerini getirme
+    """
+    return course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+
+@router.get("/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def read_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir ders seçimini getirme (Öğrenci kendi seçimini, akademisyen kendi dersinin seçimlerini görebilir)
+    """
+    db_course_selection_student = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection_student:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Yetki kontrolü
+    if current_user.role == "student":
+        if str(current_user.id) != str(db_course_selection_student.student_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu ders seçimine erişim yetkiniz yok"
+            )
+    elif current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        course = db.query(Course).filter(
+            Course.id == db_course_selection_student.course_id,
+            Course.academician_id == current_user.id
+        ).first()
+        if not course:
+            raise HTTPException(
+                status_code=403,
+                detail="Bu ders seçimine erişim yetkiniz yok"
+            )
+    
+    return db_course_selection_student
+
+@router.put("/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def update_course_selection(
+    course_selection_student_id: UUID, 
+    course_selection_student: course_selection_student_schemas.CourseSelectionStudentCreate, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini güncelleme (Öğrenci sadece kendi seçimini güncelleyebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(db_course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi ders seçimlerinizi güncelleyebilirsiniz"
+        )
+
+    return course_selection_student_crud.update_course_selection_student(
+        db, course_selection_student_id, course_selection_student
+    )
+
+@router.delete("/{course_selection_student_id}")
+def delete_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini silme (Öğrenci sadece kendi seçimini silebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(db_course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi ders seçimlerinizi silebilirsiniz"
+        )
+
+    course_selection_student_crud.delete_course_selection_student(db, course_selection_student_id)
+    return {"message": "Ders seçimi başarıyla silindi"}
+
+@router.get("/pending-approvals/{academician_id}", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def get_pending_approvals(
+    academician_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Akademisyenin onay bekleyen ders seçimlerini getirme (Sadece kendi dersleri için)
+    """
+    # Akademisyenin kendisi mi kontrol et
+    if str(current_user.id) != str(academician_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi derslerinizin onay bekleyen seçimlerini görebilirsiniz"
+        )
+    return course_selection_student_crud.get_pending_approvals_for_academician(db, academician_id)
+
+@router.put("/approve/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def approve_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini onaylama (Akademisyen sadece kendi derslerinin seçimlerini onaylayabilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_course_selection.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=403,
+            detail="Bu ders seçimini onaylama yetkiniz yok"
+        )
+
+    return course_selection_student_crud.approve_course_selection(db, course_selection_student_id)
+
+@router.get("/course/{course_id}", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def get_course_selections_by_course(
+    course_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir derse ait tüm öğrenci seçimlerini listeler.
+    Akademisyenler sadece kendi derslerinin seçimlerini görebilir.
+    Öğrenciler sadece kendi seçtikleri derslerin seçimlerini görebilir.
+    """
+    # Dersin var olup olmadığını kontrol et
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders bulunamadı"
+        )
+
+    # Yetki kontrolü
+    if current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        if str(current_user.id) != str(course.academician_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin seçimlerini görüntüleme yetkiniz yok"
+            )
+    elif current_user.role == "student":
+        # Öğrencinin seçtiği bir ders mi kontrol et
+        student_selection = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+        if not any(str(selection.course_id) == str(course_id) for selection in student_selection):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin seçimlerini görüntüleme yetkiniz yok"
+            )
+    
+    return course_selection_student_crud.get_course_selections_by_course(db, course_id)
+
+@router.put("/reject/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def reject_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini reddetme (Akademisyen sadece kendi derslerinin seçimlerini reddedebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders seçimi bulunamadı"
+        )
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_course_selection.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=403,
+            detail="Bu ders seçimini reddetme yetkiniz yok"
+        )
+
+    # Eğer seçim zaten onaylanmış veya reddedilmişse hata ver
+    if db_course_selection.is_approved is not None:
+        status = "onaylanmış" if db_course_selection.is_approved else "reddedilmiş"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bu ders seçimi zaten {status}"
+        )
+
+    return course_selection_student_crud.reject_course_selection(db, course_selection_student_id)
+
+@router.get("/course/{course_id}/students", response_model=List[course_selection_student_schemas.CourseStudentResponse])
+def get_course_students(
+    course_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir derse kayıtlı olan öğrencilerin detaylı bilgilerini getirir.
+    Akademisyenler kendi derslerinin, öğrenciler kayıtlı oldukları derslerin öğrenci listesini görebilir.
+    """
+    # Dersin var olup olmadığını kontrol et
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders bulunamadı"
+        )
+
+    # Yetki kontrolü
+    if current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        if str(current_user.id) != str(course.academician_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin öğrenci listesini görüntüleme yetkiniz yok"
+            )
+    elif current_user.role == "student":
+        # Öğrencinin seçtiği bir ders mi kontrol et
+        student_selection = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+        if not any(str(selection.course_id) == str(course_id) and selection.is_approved for selection in student_selection):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin öğrenci listesini görüntüleme yetkiniz yok"
+            )
+
+    results = course_selection_student_crud.get_students_by_course(db, course_id)
+    
+    return [
+        course_selection_student_schemas.CourseStudentResponse(
+            student_id=student.user_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            faculty=student.faculty,
+            department=student.department,
+            student_number=student.student_number,
+            selection_status=selection.is_approved,
+            selection_date=selection.created_at
+        )
+        for selection, student, first_name, last_name, email in results
+    ]
+
+------------------------------------
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.schemas import course_selection_student as course_selection_student_schemas
+from app.crud import crud_courseSelectionStudent as course_selection_student_crud
+from app.database import get_db
+from uuid import UUID
+from typing import List
+from app.models.models import User, Course
+from app.utils.auth import get_current_user, check_student_role, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/course-selections-student",
+    tags=["Course Selections Student"]
+)
+
+@router.post("/", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def create_course_selection_student(
+    course_selection: course_selection_student_schemas.CourseSelectionStudentCreate, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin ders seçimi oluşturması (Sadece kendi için, birden fazla ders seçebilir)
+    """
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendiniz için ders seçimi yapabilirsiniz"
+        )
+
+    # Derslerin var olup olmadığını kontrol et
+    for course_id in course_selection.course_ids:
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Ders bulunamadı: {course_id}"
+            )
+
+    # Aynı dersi tekrar seçmediğinden emin ol
+    existing_selections = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+    existing_course_ids = {str(selection.course_id) for selection in existing_selections}
+    
+    for course_id in course_selection.course_ids:
+        if str(course_id) in existing_course_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bu dersi zaten seçmişsiniz: {course_id}"
+            )
+
+    return course_selection_student_crud.create_multiple_course_selections(
+        db, 
+        course_selection.student_id, 
+        course_selection.course_ids
+    )
+
+@router.get("/my-selections", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def read_my_course_selections(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin kendi ders seçimlerini getirme
+    """
+    return course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+
+@router.get("/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def read_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir ders seçimini getirme (Öğrenci kendi seçimini, akademisyen kendi dersinin seçimlerini görebilir)
+    """
+    db_course_selection_student = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection_student:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Yetki kontrolü
+    if current_user.role == "student":
+        if str(current_user.id) != str(db_course_selection_student.student_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu ders seçimine erişim yetkiniz yok"
+            )
+    elif current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        course = db.query(Course).filter(
+            Course.id == db_course_selection_student.course_id,
+            Course.academician_id == current_user.id
+        ).first()
+        if not course:
+            raise HTTPException(
+                status_code=403,
+                detail="Bu ders seçimine erişim yetkiniz yok"
+            )
+    
+    return db_course_selection_student
+
+@router.put("/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def update_course_selection(
+    course_selection_student_id: UUID, 
+    course_selection_student: course_selection_student_schemas.CourseSelectionStudentCreate, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini güncelleme (Öğrenci sadece kendi seçimini güncelleyebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(db_course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi ders seçimlerinizi güncelleyebilirsiniz"
+        )
+
+    return course_selection_student_crud.update_course_selection_student(
+        db, course_selection_student_id, course_selection_student
+    )
+
+@router.delete("/{course_selection_student_id}")
+def delete_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini silme (Öğrenci sadece kendi seçimini silebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Öğrencinin kendi seçimi mi kontrol et
+    if str(current_user.id) != str(db_course_selection.student_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi ders seçimlerinizi silebilirsiniz"
+        )
+
+    course_selection_student_crud.delete_course_selection_student(db, course_selection_student_id)
+    return {"message": "Ders seçimi başarıyla silindi"}
+
+@router.get("/pending-approvals/{academician_id}", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def get_pending_approvals(
+    academician_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Akademisyenin onay bekleyen ders seçimlerini getirme (Sadece kendi dersleri için)
+    """
+    # Akademisyenin kendisi mi kontrol et
+    if str(current_user.id) != str(academician_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Sadece kendi derslerinizin onay bekleyen seçimlerini görebilirsiniz"
+        )
+    return course_selection_student_crud.get_pending_approvals_for_academician(db, academician_id)
+
+@router.put("/approve/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def approve_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini onaylama (Akademisyen sadece kendi derslerinin seçimlerini onaylayabilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(status_code=404, detail="Ders seçimi bulunamadı")
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_course_selection.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=403,
+            detail="Bu ders seçimini onaylama yetkiniz yok"
+        )
+
+    return course_selection_student_crud.approve_course_selection(db, course_selection_student_id)
+
+@router.get("/course/{course_id}", response_model=List[course_selection_student_schemas.CourseSelectionStudentResponse])
+def get_course_selections_by_course(
+    course_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir derse ait tüm öğrenci seçimlerini listeler.
+    Akademisyenler sadece kendi derslerinin seçimlerini görebilir.
+    Öğrenciler sadece kendi seçtikleri derslerin seçimlerini görebilir.
+    """
+    # Dersin var olup olmadığını kontrol et
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders bulunamadı"
+        )
+
+    # Yetki kontrolü
+    if current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        if str(current_user.id) != str(course.academician_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin seçimlerini görüntüleme yetkiniz yok"
+            )
+    elif current_user.role == "student":
+        # Öğrencinin seçtiği bir ders mi kontrol et
+        student_selection = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+        if not any(str(selection.course_id) == str(course_id) for selection in student_selection):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin seçimlerini görüntüleme yetkiniz yok"
+            )
+    
+    return course_selection_student_crud.get_course_selections_by_course(db, course_id)
+
+@router.put("/reject/{course_selection_student_id}", response_model=course_selection_student_schemas.CourseSelectionStudentResponse)
+def reject_course_selection(
+    course_selection_student_id: UUID, 
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Ders seçimini reddetme (Akademisyen sadece kendi derslerinin seçimlerini reddedebilir)
+    """
+    db_course_selection = course_selection_student_crud.get_course_selection_student(db, course_selection_student_id)
+    if not db_course_selection:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders seçimi bulunamadı"
+        )
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_course_selection.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=403,
+            detail="Bu ders seçimini reddetme yetkiniz yok"
+        )
+
+    # Eğer seçim zaten onaylanmış veya reddedilmişse hata ver
+    if db_course_selection.is_approved is not None:
+        status = "onaylanmış" if db_course_selection.is_approved else "reddedilmiş"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bu ders seçimi zaten {status}"
+        )
+
+    return course_selection_student_crud.reject_course_selection(db, course_selection_student_id)
+
+@router.get("/course/{course_id}/students", response_model=List[course_selection_student_schemas.CourseStudentResponse])
+def get_course_students(
+    course_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir derse kayıtlı olan öğrencilerin detaylı bilgilerini getirir.
+    Akademisyenler kendi derslerinin, öğrenciler kayıtlı oldukları derslerin öğrenci listesini görebilir.
+    """
+    # Dersin var olup olmadığını kontrol et
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(
+            status_code=404,
+            detail="Ders bulunamadı"
+        )
+
+    # Yetki kontrolü
+    if current_user.role == "academician":
+        # Akademisyenin kendi dersi mi kontrol et
+        if str(current_user.id) != str(course.academician_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin öğrenci listesini görüntüleme yetkiniz yok"
+            )
+    elif current_user.role == "student":
+        # Öğrencinin seçtiği bir ders mi kontrol et
+        student_selection = course_selection_student_crud.get_course_selections_by_student(db, current_user.id)
+        if not any(str(selection.course_id) == str(course_id) and selection.is_approved for selection in student_selection):
+            raise HTTPException(
+                status_code=403,
+                detail="Bu dersin öğrenci listesini görüntüleme yetkiniz yok"
+            )
+
+    results = course_selection_student_crud.get_students_by_course(db, course_id)
+    
+    return [
+        course_selection_student_schemas.CourseStudentResponse(
+            student_id=student.user_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            faculty=student.faculty,
+            department=student.department,
+            student_number=student.student_number,
+            selection_status=selection.is_approved,
+            selection_date=selection.created_at
+        )
+        for selection, student, first_name, last_name, email in results
+    ]
+
+------------------------------------------------------
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List
+from app.database import get_db
+from app.crud import crud_department
+from app.schemas.department import Department
+
+router = APIRouter(
+    prefix="/api/v1/departments",
+    tags=["Departments"]
+)
+
+@router.get("/", response_model=List[Department])
+def read_departments(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    departments = crud_department.get_departments(db, skip=skip, limit=limit)
+    return departments
+
+@router.get("/faculty/{faculty_id}", response_model=List[Department])
+def read_departments_by_faculty(faculty_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    departments = crud_department.get_departments_by_faculty(db, faculty_id=faculty_id, skip=skip, limit=limit)
+    return departments
+
+@router.get("/{department_id}", response_model=Department)
+def read_department(department_id: int, db: Session = Depends(get_db)):
+    db_department = crud_department.get_department(db, department_id=department_id)
+    if db_department is None:
+        raise HTTPException(status_code=404, detail="Department not found")
+    return db_department
+-------------------------------------------------------------------------
+
+import base64
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.models import models
+from app.schemas import face_data as face_data_schemas
+from app.crud import crud_faceData as face_data_crud
+from app.database import get_db
+from uuid import UUID
+from typing import List
+from app.models.models import FaceData, User
+from app.utils.auth import get_current_user, check_student_role, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/face-data",
+    tags=["face-data"]
+)
+
+@router.post("/", response_model=face_data_schemas.FaceDataResponse)
+async def create_face_data(
+    face_data: face_data_schemas.FaceDataCreate,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Mobil uygulamadan gelen tek bir yüz verisini kaydeder
+    """
+    # Öğrencinin kendi verisi mi kontrol et
+    if str(current_user.id) != str(face_data.student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi yüz verinizi ekleyebilirsiniz"
+        )
+
+    try:
+        # Base64 string'i bytes'a çevir
+        face_image_bytes = base64.b64decode(face_data.face_image)
+        
+        # Yüz verisini kaydet
+        db_face_data = FaceData(
+            student_id=face_data.student_id,
+            face_image=face_image_bytes
+        )
+        db.add(db_face_data)
+        db.commit()
+        db.refresh(db_face_data)
+        return db_face_data
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Yüz verisi kaydedilemedi: {str(e)}"
+        )
+
+@router.post("/bulk", response_model=str)
+async def create_multiple_face_data(
+    face_data: face_data_schemas.FaceDataUpload,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Mobil uygulamadan gelen birden fazla yüz verisini kaydeder
+    """
+    # Öğrencinin kendi verisi mi kontrol et
+    if str(current_user.id) != str(face_data.student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi yüz verilerinizi ekleyebilirsiniz"
+        )
+
+    try:
+        saved_count = 0
+        for base64_image in face_data.face_images:
+            try:
+                # Base64 string'i bytes'a çevir
+                face_image_bytes = base64.b64decode(base64_image)
+                
+                # Yüz verisini kaydet
+                db_face_data = FaceData(
+                    student_id=face_data.student_id,
+                    face_image=face_image_bytes
+                )
+                db.add(db_face_data)
+                saved_count += 1
+            except Exception as e:
+                print(f"Yüz verisi kaydedilirken hata oluştu: {str(e)}")
+                continue
+        
+        db.commit()
+        return f"{saved_count} adet yüz verisi başarıyla kaydedildi"
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Yüz verileri kaydedilemedi: {str(e)}"
+        )
+
+@router.get("/my-face-data", response_model=List[face_data_schemas.FaceDataResponse])
+async def get_my_face_data(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin kendi yüz verilerini getirir
+    """
+    return db.query(FaceData).filter(FaceData.student_id == current_user.id).all()
+
+@router.get("/{student_id}", response_model=List[face_data_schemas.FaceDataResponse])
+async def get_student_face_data(
+    student_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir öğrencinin yüz verilerini getirir
+    """
+    # Öğrenci kendi verilerine veya akademisyen tüm verilere erişebilir
+    if current_user.role == "student" and str(current_user.id) != str(student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi yüz verilerinize erişebilirsiniz"
+        )
+
+    return db.query(FaceData).filter(FaceData.student_id == student_id).all()
+
+@router.put("/{face_data_id}", response_model=face_data_schemas.FaceDataResponse)
+async def update_face_data(
+    face_data_id: UUID,
+    face_data: face_data_schemas.FaceDataCreate,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yüz verisini günceller (Sadece öğrenciler kendi verilerini güncelleyebilir)
+    """
+    db_face_data = db.query(FaceData).filter(FaceData.id == face_data_id).first()
+    if not db_face_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Yüz verisi bulunamadı"
+        )
+
+    # Öğrencinin kendi verisi mi kontrol et
+    if str(current_user.id) != str(db_face_data.student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi yüz verinizi güncelleyebilirsiniz"
+        )
+
+    for key, value in face_data.dict().items():
+        setattr(db_face_data, key, value)
+
+    db.commit()
+    db.refresh(db_face_data)
+    return db_face_data
+
+@router.delete("/{face_data_id}")
+async def delete_face_data(
+    face_data_id: UUID,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yüz verisini siler (Sadece öğrenciler kendi verilerini silebilir)
+    """
+    db_face_data = db.query(FaceData).filter(FaceData.id == face_data_id).first()
+    if not db_face_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Yüz verisi bulunamadı"
+        )
+
+    # Öğrencinin kendi verisi mi kontrol et
+    if str(current_user.id) != str(db_face_data.student_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi yüz verinizi silebilirsiniz"
+        )
+
+    db.delete(db_face_data)
+    db.commit()
+    return {"message": "Yüz verisi başarıyla silindi"}
+
+@router.post("/upload-multiple")
+def upload_multiple_face_data(request: face_data_schemas.FaceDataUpload, db: Session = Depends(get_db)):
+    for image_data in request.face_images:
+        try:
+            decoded_image = base64.b64decode(image_data)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image data format.")
+        
+        face_record = models.FaceData(
+            student_id=request.student_id,
+            face_image=decoded_image
+        )
+        db.add(face_record)
+    db.commit()
+    return {"message": f"{len(request.face_images)} face data record(s) saved."}
+
+----------------------
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from app.database import get_db
+from app.models.models import Attendance, CourseSchedule, FaceData, Student, User, Course
+from app.schemas.face_recognition import FaceRecognitionRequest
+from app.services.face_recognition_service import FaceRecognitionService
+from app.utils.auth import get_current_user, check_student_role
+
+router = APIRouter()
+
+
+@router.post("/identify/{course_id}", status_code=status.HTTP_200_OK)
+async def identify_face(
+    course_id: UUID,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Sadece yüz tanıma işlemi gerçekleştirir ve öğrenci bilgilerini döndürür.
+    Eğer ders aktif ise yoklama kaydı oluşturur.
+    """
+    try:
+        # Önce dersin var olup olmadığını kontrol et
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ders bulunamadı"
+            )
+
+        # FaceRecognitionService'i başlat
+        face_service = FaceRecognitionService(db)
+        
+        # Yüz tanıma işlemini başlat
+        recognized_student_id = face_service.start_recognition()
+        
+        if not recognized_student_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Yüz tanıma başarısız oldu veya işlem iptal edildi"
+            )
+
+        # Tanınan yüzün giriş yapmış öğrenciye ait olup olmadığını kontrol et
+        if recognized_student_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tanınan yüz giriş yapmış öğrenciye ait değil"
+            )
+
+        # Öğrenci bilgilerini getir
+        student = db.query(Student).join(User).filter(
+            Student.user_id == current_user.id
+        ).first()
+
+        if not student:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Öğrenci bulunamadı"
+            )
+
+        # Mevcut gün ve saat bilgisini al
+        current_time = datetime.now()
+        weekdays = {
+            0: 'Monday',
+            1: 'Tuesday',
+            2: 'Wednesday',
+            3: 'Thursday',
+            4: 'Friday',
+            5: 'Saturday',
+            6: 'Sunday'
+        }
+        current_weekday = weekdays[current_time.weekday()]
+
+        # Ders programını kontrol et - gün ve saat kontrolü
+        course_schedule = db.query(CourseSchedule).filter(
+            CourseSchedule.course_id == course_id,
+            CourseSchedule.weekday == current_weekday,
+            CourseSchedule.start_time <= current_time.time(),
+            CourseSchedule.end_time >= current_time.time()
+        ).first()
+
+        # Eğer aktif bir ders saati yoksa, sadece günün programını göster
+        if not course_schedule:
+            course_schedule = db.query(CourseSchedule).filter(
+                CourseSchedule.course_id == course_id,
+                CourseSchedule.weekday == current_weekday
+            ).first()
+
+        schedule_info = None
+        attendance_info = None
+        is_active = False
+        response_message = "Yüz tanıma başarılı"
+
+        if course_schedule:
+            is_active = (course_schedule.start_time <= current_time.time() <= course_schedule.end_time)
+            schedule_info = {
+                "weekday": course_schedule.weekday,
+                "start_time": course_schedule.start_time.strftime("%H:%M"),
+                "end_time": course_schedule.end_time.strftime("%H:%M"),
+                "location": course_schedule.location,
+                "is_active": is_active,
+                "status": "active" if is_active else "not_started" if current_time.time() < course_schedule.start_time else "ended"
+            }
+
+            if not is_active:
+                if current_time.time() < course_schedule.start_time:
+                    response_message = f"Ders henüz başlamadı. Ders başlangıç saati: {course_schedule.start_time.strftime('%H:%M')}"
+                else:
+                    response_message = f"Ders sona erdi. Ders bitiş saati: {course_schedule.end_time.strftime('%H:%M')}"
+            
+            # Ders aktifse yoklama kaydı oluştur
+            if is_active:
+                # Önce bugün için yoklama alınıp alınmadığını kontrol et
+                existing_attendance = db.query(Attendance).filter(
+                    Attendance.student_id == current_user.id,
+                    Attendance.course_id == course_id,
+                    Attendance.date == current_time.date()
+                ).first()
+
+                if existing_attendance:
+                    response_message = "Bu ders için zaten yoklama alınmış"
+                    attendance_info = {
+                        "id": existing_attendance.id,
+                        "status": "already_exists",
+                        "message": response_message
+                    }
+                else:
+                    # Yeni yoklama kaydı oluştur
+                    new_attendance = Attendance(
+                        student_id=current_user.id,
+                        course_id=course_id,
+                        date=current_time.date(),
+                        status=True  # present olarak işaretle
+                    )
+                    
+                    db.add(new_attendance)
+                    db.commit()
+                    db.refresh(new_attendance)
+
+                    response_message = "Yoklama kaydınız başarıyla oluşturuldu"
+                    attendance_info = {
+                        "id": new_attendance.id,
+                        "status": "created",
+                        "message": response_message
+                    }
+        else:
+            response_message = "Şu anda ders takvimi içinde değilsiniz"
+
+        response_data = {
+            "message": response_message,
+            "student_info": {
+                "id": student.user_id,
+                "student_number": student.student_number,
+                "faculty": student.faculty,
+                "department": student.department,
+                "first_name": student.user.first_name,
+                "last_name": student.user.last_name,
+                "email": student.user.email
+            },
+            "datetime_info": {
+                "weekday": current_weekday,
+                "date": current_time.date().isoformat(),
+                "time": current_time.time().strftime("%H:%M:%S")
+            },
+            "course_info": {
+                "id": course.id,
+                "name": course.name,
+                "code": course.code,
+                "schedule": schedule_info
+            }
+        }
+
+        # Eğer yoklama bilgisi varsa response'a ekle
+        if attendance_info:
+            response_data["attendance"] = attendance_info
+
+        return response_data
+
+    except Exception as e:
+        db.rollback()  # Hata durumunda transaction'ı geri al
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+-------------------------
+
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from typing import List
+from app.database import get_db
+from app.crud import crud_faculty
+from app.schemas.faculty import Faculty, FacultyCreate, FacultyUpdate
+
+router = APIRouter(
+    prefix="/api/v1/faculties",
+    tags=["Faculties"]
+)
+
+
+@router.get("/", response_model=List[Faculty])
+def read_faculties(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    faculties = crud_faculty.get_faculties(db, skip=skip, limit=limit)
+    return faculties
+
+@router.get("/{faculty_id}", response_model=Faculty)
+def read_faculty(faculty_id: int, db: Session = Depends(get_db)):
+    db_faculty = crud_faculty.get_faculty(db, faculty_id=faculty_id)
+    if db_faculty is None:
+        raise HTTPException(status_code=404, detail="Faculty not found")
+    return db_faculty
+-----------
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.schemas import performance_record as performance_record_schemas
+from app.crud import crud_performanceRecord as performance_record_crud
+from app.database import get_db
+from uuid import UUID
+from typing import List
+from app.models.models import PerformanceRecord, Course, User
+from app.schemas.performance_record import PerformanceRecordCreate, PerformanceRecordResponse
+from app.utils.auth import get_current_user, check_student_role, check_academician_role
+
+router = APIRouter(
+    prefix="/api/v1/performance-records",
+    tags=["performance-records"]
+)
+
+@router.get("/my-records", response_model=List[PerformanceRecordResponse])
+async def get_my_performance_records(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrencinin kendi performans kayıtlarını getirir
+    """
+    return db.query(PerformanceRecord).filter(PerformanceRecord.student_id == current_user.id).all()
+
+@router.get("/course/{course_id}", response_model=List[PerformanceRecordResponse])
+async def get_course_performance_records(
+    course_id: UUID,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Belirli bir dersin performans kayıtlarını getirir (Sadece akademisyenler)
+    """
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ders bulunamadı veya bu derse erişim yetkiniz yok"
+        )
+    
+    return db.query(PerformanceRecord).filter(PerformanceRecord.course_id == course_id).all()
+
+@router.post("/", response_model=PerformanceRecordResponse)
+async def create_performance_record(
+    performance_record: PerformanceRecordCreate,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Yeni performans kaydı oluşturur (Sadece akademisyenler)
+    """
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == performance_record.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ders bulunamadı veya bu derse erişim yetkiniz yok"
+        )
+
+    db_performance_record = PerformanceRecord(**performance_record.dict())
+    db.add(db_performance_record)
+    db.commit()
+    db.refresh(db_performance_record)
+    return db_performance_record
+
+@router.put("/{record_id}", response_model=PerformanceRecordResponse)
+async def update_performance_record(
+    record_id: UUID,
+    performance_record: PerformanceRecordCreate,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Performans kaydını günceller (Sadece akademisyenler)
+    """
+    db_record = db.query(PerformanceRecord).filter(PerformanceRecord.id == record_id).first()
+    if not db_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Performans kaydı bulunamadı"
+        )
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_record.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu performans kaydını güncelleme yetkiniz yok"
+        )
+
+    for key, value in performance_record.dict().items():
+        setattr(db_record, key, value)
+
+    db.commit()
+    db.refresh(db_record)
+    return db_record
+
+@router.delete("/{record_id}")
+async def delete_performance_record(
+    record_id: UUID,
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Performans kaydını siler (Sadece akademisyenler)
+    """
+    db_record = db.query(PerformanceRecord).filter(PerformanceRecord.id == record_id).first()
+    if not db_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Performans kaydı bulunamadı"
+        )
+
+    # Akademisyenin kendi dersi mi kontrol et
+    course = db.query(Course).filter(
+        Course.id == db_record.course_id,
+        Course.academician_id == current_user.id
+    ).first()
+    
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu performans kaydını silme yetkiniz yok"
+        )
+
+    db.delete(db_record)
+    db.commit()
+    return {"message": "Performans kaydı başarıyla silindi"}
+
+-----------------------------------
+
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List
+from app.database import get_db
+from app.models.models import Student, User, FaceData
+from app.schemas.student import StudentCreate, StudentResponse, StudentUpdate
+from app.services.face_capture_service import FaceCaptureService
+from app.crud import crud_student
+from app.utils.auth import get_current_user, check_student_role, check_academician_role, get_password_hash
+import base64
+
+router = APIRouter(
+    prefix="/api/v1/students",
+    tags=["students"]
+)
+
+@router.post("/", response_model=StudentResponse)
+async def create_student(
+    student: StudentCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Yeni öğrenci kaydı oluşturur ve yüz verisi toplar
+    """
+    try:
+        # 1. Kullanıcı oluştur
+        user = User(
+            first_name=student.first_name,
+            last_name=student.last_name,
+            email=student.email,
+            password=get_password_hash(student.password),
+            role="student"
+        )
+        db.add(user)
+        db.flush()  # ID'yi almak için flush yap
+
+        # 2. Öğrenci oluştur
+        new_student = Student(
+            user_id=user.id,
+            faculty=student.faculty,
+            department=student.department,
+            student_number=student.student_number,
+            class_=student.class_
+        )
+        db.add(new_student)
+        db.commit()
+
+        return StudentResponse(
+            user_id=new_student.user_id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            email=user.email,
+            faculty=new_student.faculty,
+            department=new_student.department,
+            student_number=new_student.student_number,
+            class_=new_student.class_,
+            role=user.role
+        )
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.post("/with-face-data", response_model=StudentResponse)
+def create_student_with_face_data(
+    student: StudentCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    Yeni öğrenci kaydı oluşturur ve yüz verilerini kaydeder
+    """
+    try:
+        # Email kontrolü
+        existing_user = db.query(User).filter(User.email == student.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bu email adresi zaten kayıtlı"
+            )
+
+        # 1. Kullanıcı oluştur
+        user = User(
+            first_name=student.first_name,
+            last_name=student.last_name,
+            email=student.email,
+            password=get_password_hash(student.password),
+            role="student"
+        )
+        db.add(user)
+        db.flush()  # ID'yi almak için flush yap
+
+        # 2. Öğrenci oluştur
+        new_student = Student(
+            user_id=user.id,
+            faculty=student.faculty,
+            department=student.department,
+            student_number=student.student_number,
+            class_=student.class_
+        )
+        db.add(new_student)
+        db.flush()
+
+        # 3. Yüz verilerini kaydet
+        for face_data in student.face_data:
+            try:
+                # Base64 string'i bytes'a çevir
+                face_image_bytes = face_data.get_face_image_bytes()
+                
+                # Yüz verisini kaydet
+                db_face_data = FaceData(
+                    student_id=user.id,
+                    face_image=face_image_bytes
+                )
+                db.add(db_face_data)
+            except Exception as e:
+                print(f"Yüz verisi kaydedilirken hata oluştu: {str(e)}")
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Yüz verisi kaydedilemedi: {str(e)}"
+                )
+
+        db.commit()
+
+        return StudentResponse(
+            user_id=new_student.user_id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            email=user.email,
+            faculty=new_student.faculty,
+            department=new_student.department,
+            student_number=new_student.student_number,
+            class_=new_student.class_,
+            role=user.role
+        )
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/me", response_model=StudentResponse)
+async def read_student_me(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Giriş yapmış öğrencinin kendi bilgilerini getirir
+    """
+    student = crud_student.get_student(db, current_user.id)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Öğrenci bulunamadı"
+        )
+    return student
+
+@router.get("/{student_id}", response_model=StudentResponse)
+def get_student(
+    student_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    ID'ye göre öğrenci getirir
+    """
+    # Öğrenci kendi bilgilerine erişebilir
+    if current_user.role == "student" and str(current_user.id) != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu bilgilere erişim yetkiniz yok"
+        )
+    
+    student = crud_student.get_student(db, student_id)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Öğrenci bulunamadı"
+        )
+    return student
+
+@router.get("/", response_model=List[StudentResponse])
+def get_students(
+    current_user: User = Depends(check_academician_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Tüm öğrencileri getirir (Sadece akademisyenler erişebilir)
+    """
+    return crud_student.get_students(db)
+
+@router.put("/me", response_model=StudentResponse)
+async def update_student_me(
+    student_update: StudentUpdate,
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Giriş yapmış öğrencinin kendi bilgilerini günceller
+    """
+    updated_student = crud_student.update_student(db, str(current_user.id), student_update)
+    if not updated_student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Öğrenci bulunamadı"
+        )
+    return updated_student
+
+@router.put("/{student_id}", response_model=StudentResponse)
+async def update_student(
+    student_id: str,
+    student_update: StudentUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Öğrenci bilgilerini günceller.
+    Öğrenciler sadece kendi bilgilerini güncelleyebilir.
+    Akademisyenler tüm öğrencilerin bilgilerini güncelleyebilir.
+    """
+    # Yetki kontrolü
+    if current_user.role == "student" and str(current_user.id) != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece kendi bilgilerinizi güncelleyebilirsiniz"
+        )
+    
+    # Öğrenciyi güncelle
+    updated_student = crud_student.update_student(db, student_id, student_update)
+    if not updated_student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Öğrenci bulunamadı"
+        )
+    return updated_student
+
+@router.delete("/me")
+async def delete_student_me(
+    current_user: User = Depends(check_student_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Giriş yapmış öğrencinin kendi hesabını siler
+    """
+    student = crud_student.get_student(db, current_user.id)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Öğrenci bulunamadı"
+        )
+    
+    crud_student.delete_student(db, current_user.id)
+    return {"message": "Hesabınız başarıyla silindi"}
+
+----------------------------
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.schemas.user import UserCreate, UserResponse
+from app.crud.crud_user import create_user, get_user, get_users, delete_user
+from app.database import SessionLocal
+
+router = APIRouter(
+    prefix="/api/v1/users",
+    tags=["users"]
+)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@router.get("/{user_id}", response_model=UserResponse)
+def read_user(user_id: str, db: Session = Depends(get_db)):
+    db_user = get_user(db, user_id)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return db_user
+
+@router.get("/", response_model=list[UserResponse])
+def list_users(db: Session = Depends(get_db)):
+    users = get_users(db)
+    return users
+
+@router.delete("/{user_id}")
+def remove_user(user_id: str, db: Session = Depends(get_db)):
+    deleted_user = delete_user(db, user_id)
+    if not deleted_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+******************************************************************************************************************************************************************
+
+db tables:
+
+CREATE TABLE IF NOT EXISTS public.academicians
+(
+    user_id uuid NOT NULL,
+    faculty character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    department character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    academician_number character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT academicians_pkey PRIMARY KEY (user_id),
+    CONSTRAINT academicians_academician_number_key UNIQUE (academician_number),
+    CONSTRAINT academicians_user_id_fkey FOREIGN KEY (user_id)
+        REFERENCES public.users (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.academicians
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.attendances
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    student_id uuid,
+    course_id uuid,
+    date date NOT NULL,
+    status boolean NOT NULL,
+    CONSTRAINT attendances_pkey PRIMARY KEY (id),
+    CONSTRAINT attendances_course_id_fkey FOREIGN KEY (course_id)
+        REFERENCES public.courses (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.attendances
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.course_schedules
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    course_id uuid NOT NULL,
+    weekday character varying(10) COLLATE pg_catalog."default" NOT NULL,
+    start_time time without time zone NOT NULL,
+    end_time time without time zone NOT NULL,
+    location character varying(255) COLLATE pg_catalog."default",
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    CONSTRAINT course_schedules_pkey PRIMARY KEY (id),
+    CONSTRAINT course_schedules_course_id_fkey FOREIGN KEY (course_id)
+        REFERENCES public.courses (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT course_schedules_weekday_check CHECK (weekday::text = ANY (ARRAY['Monday'::character varying, 'Tuesday'::character varying, 'Wednesday'::character varying, 'Thursday'::character varying, 'Friday'::character varying, 'Saturday'::character varying, 'Sunday'::character varying]::text[]))
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.course_schedules
+    OWNER to postgres;
+
+CREATE TABLE IF NOT EXISTS public.course_selections_academicians
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    academician_id uuid NOT NULL,
+    course_id uuid NOT NULL,
+    is_approved boolean DEFAULT false,
+    requested_at timestamp without time zone DEFAULT now(),
+    reviewed_at timestamp without time zone,
+    CONSTRAINT course_selections_academicians_pkey PRIMARY KEY (id),
+    CONSTRAINT course_selections_academicians_academician_id_fkey FOREIGN KEY (academician_id)
+        REFERENCES public.academicians (user_id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT course_selections_academicians_course_id_fkey FOREIGN KEY (course_id)
+        REFERENCES public.courses (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.course_selections_academicians
+    OWNER to postgres;
+
+CREATE TABLE IF NOT EXISTS public.course_selections_student
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    student_id uuid,
+    course_id uuid,
+    is_approved boolean,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT course_selections_pkey PRIMARY KEY (id),
+    CONSTRAINT course_selections_course_id_fkey FOREIGN KEY (course_id)
+        REFERENCES public.courses (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.course_selections_student
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.courses
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    name character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    code character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    academician_id uuid,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT courses_pkey PRIMARY KEY (id),
+    CONSTRAINT courses_code_key UNIQUE (code)
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.courses
+    OWNER to postgres;
+
+CREATE TABLE IF NOT EXISTS public.departments
+(
+    id integer NOT NULL DEFAULT nextval('departments_id_seq'::regclass),
+    name text COLLATE pg_catalog."default" NOT NULL,
+    faculty_id integer NOT NULL,
+    CONSTRAINT departments_pkey PRIMARY KEY (id),
+    CONSTRAINT departments_name_faculty_id_key UNIQUE (name, faculty_id),
+    CONSTRAINT departments_faculty_id_fkey FOREIGN KEY (faculty_id)
+        REFERENCES public.faculties (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.departments
+    OWNER to postgres;
+
+CREATE TABLE IF NOT EXISTS public.face_data
+(
+    id uuid NOT NULL,
+    face_image bytea NOT NULL,
+    created_at timestamp without time zone DEFAULT now(),
+    student_id uuid,
+    CONSTRAINT face_data_pkey PRIMARY KEY (id)
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.face_data
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.faculties
+(
+    id integer NOT NULL DEFAULT nextval('faculties_id_seq'::regclass),
+    name text COLLATE pg_catalog."default" NOT NULL,
+    CONSTRAINT faculties_pkey PRIMARY KEY (id),
+    CONSTRAINT faculties_name_key UNIQUE (name)
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.faculties
+    OWNER to postgres;
+
+CREATE TABLE IF NOT EXISTS public.performance_records
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    student_id uuid,
+    course_id uuid,
+    attendance_rate double precision NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT performance_records_pkey PRIMARY KEY (id),
+    CONSTRAINT performance_records_course_id_fkey FOREIGN KEY (course_id)
+        REFERENCES public.courses (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT performance_records_attendance_rate_check CHECK (attendance_rate >= 0::double precision AND attendance_rate <= 1::double precision)
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.performance_records
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.students
+(
+    user_id uuid NOT NULL,
+    faculty character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    department character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    student_number character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    class character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    CONSTRAINT students_pkey PRIMARY KEY (user_id),
+    CONSTRAINT students_student_number_key UNIQUE (student_number),
+    CONSTRAINT students_user_id_fkey FOREIGN KEY (user_id)
+        REFERENCES public.users (id) MATCH SIMPLE
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.students
+    OWNER to admin;
+
+CREATE TABLE IF NOT EXISTS public.users
+(
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    first_name character varying(150) COLLATE pg_catalog."default" NOT NULL,
+    last_name character varying(150) COLLATE pg_catalog."default" NOT NULL,
+    email character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    password character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    role character varying(50) COLLATE pg_catalog."default" NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT users_pkey PRIMARY KEY (id),
+    CONSTRAINT users_email_key UNIQUE (email),
+    CONSTRAINT users_role_check CHECK (role::text = ANY (ARRAY['admin'::character varying, 'academician'::character varying, 'student'::character varying]::text[]))
+)
+
+TABLESPACE pg_default;
+
+ALTER TABLE IF EXISTS public.users
+    OWNER to admin;
+
+
+  You are an expert in TypeScript, React Native, Expo, and Mobile UI development.
+
+  Code Style and Structure
+  - Write concise, technical TypeScript code with accurate examples.
+  - Use functional and declarative programming patterns; avoid classes.
+  - Prefer iteration and modularization over code duplication.
+  - Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError).
+  - Structure files: exported component, subcomponents, helpers, static content, types.
+  - Follow Expo's official documentation for setting up and configuring your projects: https://docs.expo.dev/
+
+  Naming Conventions
+  - Use lowercase with dashes for directories (e.g., components/auth-wizard).
+  - Favor named exports for components.
+
+  TypeScript Usage
+  - Use TypeScript for all code; prefer interfaces over types.
+  - Avoid enums; use maps instead.
+  - Use functional components with TypeScript interfaces.
+  - Use strict mode in TypeScript for better type safety.
+
+  Syntax and Formatting
+  - Use the "function" keyword for pure functions.
+  - Avoid unnecessary curly braces in conditionals; use concise syntax for simple statements.
+  - Use declarative JSX.
+  - Use Prettier for consistent code formatting.
+
+  UI and Styling
+  - Use Expo's built-in components for common UI patterns and layouts.
+  - Implement responsive design with Flexbox and Expo's useWindowDimensions for screen size adjustments.
+  - Use styled-components or Tailwind CSS for component styling.
+  - Implement dark mode support using Expo's useColorScheme.
+  - Ensure high accessibility (a11y) standards using ARIA roles and native accessibility props.
+  - Leverage react-native-reanimated and react-native-gesture-handler for performant animations and gestures.
+
+  Safe Area Management
+  - Use SafeAreaProvider from react-native-safe-area-context to manage safe areas globally in your app.
+  - Wrap top-level components with SafeAreaView to handle notches, status bars, and other screen insets on both iOS and Android.
+  - Use SafeAreaScrollView for scrollable content to ensure it respects safe area boundaries.
+  - Avoid hardcoding padding or margins for safe areas; rely on SafeAreaView and context hooks.
+
+  Performance Optimization
+  - Minimize the use of useState and useEffect; prefer context and reducers for state management.
+  - Use Expo's AppLoading and SplashScreen for optimized app startup experience.
+  - Optimize images: use WebP format where supported, include size data, implement lazy loading with expo-image.
+  - Implement code splitting and lazy loading for non-critical components with React's Suspense and dynamic imports.
+  - Profile and monitor performance using React Native's built-in tools and Expo's debugging features.
+  - Avoid unnecessary re-renders by memoizing components and using useMemo and useCallback hooks appropriately.
+
+  Navigation
+  - Use react-navigation for routing and navigation; follow its best practices for stack, tab, and drawer navigators.
+  - Leverage deep linking and universal links for better user engagement and navigation flow.
+  - Use dynamic routes with expo-router for better navigation handling.
+
+  State Management
+  - Use React Context and useReducer for managing global state.
+  - Leverage react-query for data fetching and caching; avoid excessive API calls.
+  - For complex state management, consider using Zustand or Redux Toolkit.
+  - Handle URL search parameters using libraries like expo-linking.
+
+  Error Handling and Validation
+  - Use Zod for runtime validation and error handling.
+  - Implement proper error logging using Sentry or a similar service.
+  - Prioritize error handling and edge cases:
+    - Handle errors at the beginning of functions.
+    - Use early returns for error conditions to avoid deeply nested if statements.
+    - Avoid unnecessary else statements; use if-return pattern instead.
+    - Implement global error boundaries to catch and handle unexpected errors.
+  - Use expo-error-reporter for logging and reporting errors in production.
+
+  Testing
+  - Write unit tests using Jest and React Native Testing Library.
+  - Implement integration tests for critical user flows using Detox.
+  - Use Expo's testing tools for running tests in different environments.
+  - Consider snapshot testing for components to ensure UI consistency.
+
+  Security
+  - Sanitize user inputs to prevent XSS attacks.
+  - Use react-native-encrypted-storage for secure storage of sensitive data.
+  - Ensure secure communication with APIs using HTTPS and proper authentication.
+  - Use Expo's Security guidelines to protect your app: https://docs.expo.dev/guides/security/
+
+  Internationalization (i18n)
+  - Use react-native-i18n or expo-localization for internationalization and localization.
+  - Support multiple languages and RTL layouts.
+  - Ensure text scaling and font adjustments for accessibility.
+
+  Key Conventions
+  1. Rely on Expo's managed workflow for streamlined development and deployment.
+  2. Prioritize Mobile Web Vitals (Load Time, Jank, and Responsiveness).
+  3. Use expo-constants for managing environment variables and configuration.
+  4. Use expo-permissions to handle device permissions gracefully.
+  5. Implement expo-updates for over-the-air (OTA) updates.
+  6. Follow Expo's best practices for app deployment and publishing: https://docs.expo.dev/distribution/introduction/
+  7. Ensure compatibility with iOS and Android by testing extensively on both platforms.
+
+  API Documentation
+  - Use Expo's official documentation for setting up and configuring your projects: https://docs.expo.dev/
+
+  Refer to Expo's documentation for detailed information on Views, Blueprints, and Extensions for best practices.
+
+    

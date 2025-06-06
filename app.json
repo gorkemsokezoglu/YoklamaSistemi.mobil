@@ -1,22 +1,48 @@
 {
   "expo": {
-    "name": "YoklamaSistemi.mobil",
+    "name": "Yoklama Sistemi",
     "slug": "YoklamaSistemi.mobil",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/iucLogo.png",
     "scheme": "yoklamasistemimobil",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#11263E",
+    "splash": {
+      "image": "./assets/images/iucLogo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#11263E"
+    },
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Öğrenci yoklaması almak için kamera erişimi gerekiyor",
+        "NSPhotoLibraryUsageDescription": "Galeriden fotoğraf seçmek için erişim gerekiyor",
+        "NSMicrophoneUsageDescription": "Video kaydı için mikrofon erişimi gerekiyor"
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/images/iucLogo.png",
+        "backgroundColor": "#11263E"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.yoklamasistemi.mobil",
+      "softwareKeyboardLayoutMode": "pan",
+      "navigationBarColor": "#001F3F",
+      "statusBar": {
+        "backgroundColor": "#001F3F",
+        "barStyle": "light-content"
+      },
+      "permissions": [
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "DOWNLOAD_WITHOUT_NOTIFICATION",
+        "MEDIA_LIBRARY",
+        "MEDIA_LIBRARY_WRITE_ONLY",
+        "CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -28,13 +54,36 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/iucLogo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#11263E"
+        }
+      ],
+      [
+        "expo-notifications"
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Öğrenci yoklaması almak için kamera erişimi gerekiyor",
+          "microphonePermission": "Video kaydı için mikrofon erişimi gerekiyor"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Galeriden fotoğraf seçmek için erişim gerekiyor"
         }
       ]
     ],
+    "notification": {
+      "icon": "./assets/images/iucLogo.png",
+      "color": "#11263E",
+      "androidMode": "default",
+      "androidCollapsedTitle": "Yoklama Sistemi",
+      "iosDisplayInForeground": true
+    },
     "experiments": {
       "typedRoutes": true
     }
