@@ -35,8 +35,8 @@ Bu mobil uygulama, eğitim kurumları için yüz tanıma teknolojisi kullanarak 
 1. Projeyi klonlayın:
 
 ```bash
-git clone https://github.com/gorkemsokezoglu/attendance-system-use-face-recognition.git
-cd attendance-system-use-face-recognition
+git clone https://github.com/gorkemsokezoglu/YoklamaSistemi.mobil.git
+cd YoklamaSistemi.mobil
 ```
 
 2. Bağımlılıkları yükleyin:
