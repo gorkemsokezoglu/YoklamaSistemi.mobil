@@ -265,12 +265,15 @@ export default function RegisterScreen() {
                 const response = await authService.register(registerData);
 
                 Alert.alert(
-                    'Başarılı',
-                    'Kayıt işleminiz başarıyla tamamlandı. Giriş yapabilirsiniz.',
+                    'Hesabınızı Doğrulayın',
+                    'E-posta adresinize gönderilen doğrulama kodunu girerek kaydınızı tamamlayın.',
                     [
                         {
                             text: 'Tamam',
-                            onPress: () => router.replace('/(auth)/login')
+                            onPress: () => router.replace({
+                                pathname: '/(auth)/email-verification',
+                                params: { email: email.trim() }
+                            })
                         }
                     ]
                 );

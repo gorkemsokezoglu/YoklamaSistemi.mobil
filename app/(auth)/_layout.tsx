@@ -27,6 +27,24 @@ export default function AuthLayout() {
             title: 'Kayıt Ol',
           }}
         />
+        <Stack.Screen
+          name="email-verification"
+          options={{
+            title: 'E-posta Doğrulama',
+          }}
+        />
+        <Stack.Screen
+          name="forgot-password"
+          options={{
+            title: 'Şifremi Unuttum',
+          }}
+        />
+        <Stack.Screen
+          name="reset-password"
+          options={{
+            title: 'Şifre Sıfırla',
+          }}
+        />
       </Stack>
     </View>
   );

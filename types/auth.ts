@@ -66,6 +66,44 @@ export interface ChangePasswordRequest {
   confirm_new_password: string;
 }
 
+// E-posta doğrulama için yeni tipler
+export interface VerificationCodeRequest {
+  email: string;
+}
+
+export interface VerificationCodeVerify {
+  email: string;
+  code: string;
+}
+
+export interface VerificationCodeResponse {
+  message: string;
+  remaining_time: number;
+}
+
+export interface VerificationStatusResponse {
+  message: string;
+  email: string;
+  verified: boolean;
+}
+
+// Şifre sıfırlama için yeni tipler
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ResetPasswordRequest {
+  email: string;
+  code: string;
+  new_password: string;
+  confirm_password: string;
+}
+
+export interface ResetPasswordResponse {
+  message: string;
+  email: string;
+}
+
 export interface StudentProfile {
   user_id: string;
   first_name: string;

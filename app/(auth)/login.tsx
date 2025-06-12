@@ -42,8 +42,35 @@ function Login() {
         router.replace('/(academician)');
       }
     } catch (error: any) {
-      // Servisten gelen hata mesajını gösterme
-      Alert.alert('Uyarı', 'Giriş yapılamadı. Lütfen e-posta ve şifrenizi kontrol edin.');
+      let errorMessage = 'Giriş yapılamadı. Lütfen e-posta ve şifrenizi kontrol edin.';
+      
+      // E-posta doğrulama hatası kontrolü
+      if (error.response?.status === 403 && error.response?.data?.detail?.includes('e-posta adresinizi doğrulayın')) {
+        Alert.alert(
+          'E-posta Doğrulama Gerekli',
+          'Lütfen önce e-posta adresinizi doğrulayın. E-posta kutunuzu kontrol edin.',
+          [
+            {
+              text: 'İptal',
+              style: 'cancel'
+            },
+            {
+              text: 'Doğrula',
+              onPress: () => router.push({
+                pathname: '/(auth)/email-verification',
+                params: { email }
+              })
+            }
+          ]
+        );
+        return;
+      }
+      
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      }
+
+      Alert.alert('Uyarı', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -115,6 +142,12 @@ function Login() {
           <Link href="/(auth)/register" asChild>
             <Text style={styles.registerText}>
               Hesabınız yok mu? Kayıt olun
+            </Text>
+          </Link>
+
+          <Link href="/(auth)/forgot-password" asChild>
+            <Text style={styles.forgotPasswordText}>
+              Şifremi Unuttum
             </Text>
           </Link>
         </View>
@@ -190,6 +223,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 15,
     fontSize: 16,
+    textDecorationLine: 'underline',
+  },
+  forgotPasswordText: {
+    color: '#B4B4B4',
+    textAlign: 'center',
+    marginTop: 10,
+    fontSize: 14,
     textDecorationLine: 'underline',
   },
 });

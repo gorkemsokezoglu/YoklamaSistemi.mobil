@@ -1,4 +1,4 @@
-import { AcademicianCreate, AcademicianResponse, ChangePasswordRequest, LoginRequest, LoginResponse, RegisterRequest, StudentCreate, StudentResponse } from '../types/auth';
+import { AcademicianCreate, AcademicianResponse, ChangePasswordRequest, ForgotPasswordRequest, LoginRequest, LoginResponse, RegisterRequest, ResetPasswordRequest, ResetPasswordResponse, StudentCreate, StudentResponse, VerificationCodeRequest, VerificationCodeResponse, VerificationCodeVerify, VerificationStatusResponse } from '../types/auth';
 import api from './api';
 
 export const authService = {
@@ -52,6 +52,46 @@ export const authService = {
       if (error.response?.status === 400 && error.response?.data?.detail === "Bu email adresi zaten kayıtlı") {
         throw new Error("Bu email adresi zaten kayıtlı");
       }
+      throw error;
+    }
+  },
+
+  // E-posta doğrulama kodu doğrulama
+  verifyCode: async (data: VerificationCodeVerify): Promise<VerificationStatusResponse> => {
+    try {
+      const response = await api.post('/auth/verify-code', data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Doğrulama kodu yeniden gönderme
+  resendVerificationCode: async (data: VerificationCodeRequest): Promise<VerificationCodeResponse> => {
+    try {
+      const response = await api.post('/auth/resend-verification', data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Şifre sıfırlama kodu gönderme
+  forgotPassword: async (data: ForgotPasswordRequest): Promise<VerificationCodeResponse> => {
+    try {
+      const response = await api.post('/auth/forgot-password', data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Şifre sıfırlama
+  resetPassword: async (data: ResetPasswordRequest): Promise<ResetPasswordResponse> => {
+    try {
+      const response = await api.post('/auth/reset-password', data);
+      return response.data;
+    } catch (error) {
       throw error;
     }
   },
