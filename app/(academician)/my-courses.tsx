@@ -258,15 +258,6 @@ export default function MyCoursesScreen() {
                                     >
                                         Detaylar
                                     </Button>
-                                    <Button
-                                        mode="outlined"
-                                        onPress={() => {}}
-                                        style={styles.actionButton}
-                                        icon="clipboard-check"
-                                        textColor="#D4AF37"
-                                    >
-                                        Yoklama Al
-                                    </Button>
                                 </View>
                             </Card.Content>
                         </Card>

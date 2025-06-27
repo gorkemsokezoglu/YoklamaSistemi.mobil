@@ -3,7 +3,7 @@ import * as FileSystem from 'expo-file-system';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useState } from 'react';
-import { Image, Platform, ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
+import { BackHandler, Image, Platform, ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
 import { ActivityIndicator, Button, Card, Chip, DataTable, Dialog, Divider, IconButton, Portal, Text, TextInput } from 'react-native-paper';
 import { useNotifications } from '../../../contexts/NotificationContext';
 import { attendanceService } from '../../../services/attendance';
@@ -68,6 +68,20 @@ export default function CourseDetailScreen() {
         loadEnrolledStudents();
         loadAttendanceStats();
     }, [courseId]);
+
+    useEffect(() => {
+        const backAction = () => {
+            router.replace('/(academician)/my-courses');
+            return true;
+        };
+
+        const backHandler = BackHandler.addEventListener(
+            'hardwareBackPress',
+            backAction
+        );
+
+        return () => backHandler.remove();
+    }, []);
 
     const loadCourseData = async () => {
         try {
@@ -494,7 +508,7 @@ export default function CourseDetailScreen() {
             setDateError(null);
             
             // Ders detay sayfasına yönlendir
-            router.back();
+            router.replace('/(academician)/my-courses');
 
         } catch (err) {
             console.error('Ders iptal edilirken hata:', err);

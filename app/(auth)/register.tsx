@@ -1,9 +1,10 @@
 import { Picker } from '@react-native-picker/picker';
-import * as ImagePicker from 'expo-image-picker';
+import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
 import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
-import { Button, Card, Checkbox, Modal, Portal, ProgressBar, Text, TextInput } from 'react-native-paper';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Dimensions, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Button, Card, Checkbox, IconButton, Modal, Portal, ProgressBar, Text, TextInput } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { KVKK_TEXT } from '../../constants/kvkk';
 import { authService } from '../../services/auth';
 import { departmentService } from '../../services/department';
@@ -11,6 +12,8 @@ import { facultyService } from '../../services/faculty';
 import { AcademicianCreate, StudentCreate } from '../../types/auth';
 import { Department } from '../../types/department';
 import { Faculty } from '../../types/faculty';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 export default function RegisterScreen() {
     const params = useLocalSearchParams();
@@ -38,6 +41,22 @@ export default function RegisterScreen() {
     const [studentNumberError, setStudentNumberError] = useState('');
     const [academicianNumberError, setAcademicianNumberError] = useState('');
     const [showKvkkModal, setShowKvkkModal] = useState(false);
+
+    // Kamera için yeni state'ler
+    const [showCamera, setShowCamera] = useState(false);
+    const [permission, requestPermission] = useCameraPermissions();
+    const [facing, setFacing] = useState<CameraType>('front');
+    const [isCapturing, setIsCapturing] = useState(false);
+    const cameraRef = useRef<CameraView>(null);
+
+    // Fotoğraf rehberi mesajları
+    const PHOTO_INSTRUCTIONS = [
+        "Düz bakış - Kameraya doğrudan bakın",
+        "Sağ çapraz - Başınızı hafif sağa çevirin", 
+        "Sol çapraz - Başınızı hafif sola çevirin",
+        "Sağ profil - Başınızı sağa 45° çevirin",
+        "Sol profil - Başınızı sola 45° çevirin"
+    ];
 
     useEffect(() => {
         loadFaculties();
@@ -102,48 +121,67 @@ export default function RegisterScreen() {
         }
     };
 
-    const pickImage = async () => {
+    // Yeni kamera açma fonksiyonu
+    const openCamera = async () => {
+        if (!permission) {
+            const newPermission = await requestPermission();
+            if (!newPermission.granted) {
+                Alert.alert('Hata', 'Kamera izni olmadan fotoğraf çekemezsiniz!');
+                return;
+            }
+        } else if (!permission.granted) {
+            const newPermission = await requestPermission();
+            if (!newPermission.granted) {
+                Alert.alert('Hata', 'Kamera izni olmadan fotoğraf çekemezsiniz!');
+                return;
+            }
+        }
+
+        setShowCamera(true);
+    };
+
+    // Fotoğraf çekme fonksiyonu
+    const takePicture = async () => {
+        if (!cameraRef.current || isCapturing) return;
+
         try {
-            if (faceImages.length >= REQUIRED_FACE_IMAGES) {
-                alert('Maksimum fotoğraf sayısına ulaştınız!');
-                return;
-            }
-
-            // Kamera izni kontrolü
-            const { status } = await ImagePicker.requestCameraPermissionsAsync();
-            if (status !== 'granted') {
-                alert('Kamera izni olmadan fotoğraf çekemezsiniz!');
-                return;
-            }
-
-            const result = await ImagePicker.launchCameraAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                allowsEditing: false,
+            setIsCapturing(true);
+            
+            const photo = await cameraRef.current.takePictureAsync({
                 quality: 0.7,
                 base64: true,
-                exif: false,
-                presentationStyle: ImagePicker.UIImagePickerPresentationStyle.FULL_SCREEN,
+                skipProcessing: false,
             });
 
-            if (!result.canceled && result.assets[0].base64) {
-                const base64Image = result.assets[0].base64;
-                setFaceImages(prev => [...prev, base64Image]);
-
-                // Son fotoğraf çekildiyse başarı mesajı göster
-                if (faceImages.length + 1 === REQUIRED_FACE_IMAGES) {
-                    alert('Tebrikler! Tüm fotoğraflar başarıyla çekildi.');
-                } else {
-                    alert(`${REQUIRED_FACE_IMAGES - (faceImages.length + 1)} fotoğraf daha çekmeniz gerekiyor.`);
+            if (photo && photo.base64) {
+                setFaceImages(prev => [...prev, photo.base64!]);
+                
+                // 5 fotoğraf tamamlandığında kamerayı kapat
+                if (faceImages.length + 1 >= REQUIRED_FACE_IMAGES) {
+                    setShowCamera(false);
+                    Alert.alert('Tebrikler!', 'Tüm fotoğraflar başarıyla çekildi.');
                 }
             }
         } catch (error) {
             console.error('Fotoğraf çekerken hata:', error);
-            alert('Fotoğraf çekilemedi. Lütfen tekrar deneyin.');
+            Alert.alert('Hata', 'Fotoğraf çekilemedi. Lütfen tekrar deneyin.');
+        } finally {
+            setIsCapturing(false);
         }
     };
 
     const removeFaceImage = (index: number) => {
         setFaceImages(prev => prev.filter((_, i) => i !== index));
+    };
+
+    // Kamera görünümünü kapat
+    const closeCamera = () => {
+        setShowCamera(false);
+    };
+
+    // Kamera yönünü değiştir
+    const toggleCameraFacing = () => {
+        setFacing(current => (current === 'back' ? 'front' : 'back'));
     };
 
     // Email validasyon fonksiyonu
@@ -314,6 +352,67 @@ export default function RegisterScreen() {
         setShowKvkkModal(true);
     };
 
+    // Kamera Modal Bileşeni
+    const renderCameraModal = () => (
+        <Portal>
+            <Modal 
+                visible={showCamera} 
+                onDismiss={closeCamera}
+                contentContainerStyle={styles.cameraModalContainer}
+                style={{ margin: 0 }}
+            >
+                <View style={styles.cameraContainer}>
+                    {/* Kamera Görünümü */}
+                    <CameraView
+                        ref={cameraRef}
+                        style={styles.camera}
+                        facing={facing}
+                        mode="picture"
+                    >
+                        {/* Üst Bar */}
+                        <View style={styles.cameraTopBar}>
+                            <IconButton
+                                icon="close"
+                                iconColor="#FFFFFF"
+                                size={28}
+                                onPress={closeCamera}
+                            />
+                            <Text style={styles.cameraTitle}>
+                                Fotoğraf {faceImages.length + 1}/{REQUIRED_FACE_IMAGES}
+                            </Text>
+                            <IconButton
+                                icon="camera-flip"
+                                iconColor="#FFFFFF"
+                                size={28}
+                                onPress={toggleCameraFacing}
+                            />
+                        </View>
+
+                        {/* Merkez Rehber */}
+                        <View style={styles.centerGuide}>
+                            <View style={styles.faceFrame} />
+                            <Text style={styles.instructionText}>
+                                {PHOTO_INSTRUCTIONS[faceImages.length]}
+                            </Text>
+                        </View>
+
+                        {/* Alt Bar */}
+                        <View style={styles.cameraBottomBar}>
+                            {/* Çekim Butonu */}
+                            <TouchableOpacity
+                                style={[styles.captureButton, isCapturing && styles.captureButtonDisabled]}
+                                onPress={takePicture}
+                                disabled={isCapturing}
+                            >
+                                <View style={styles.captureButtonInner} />
+                            </TouchableOpacity>
+                        </View>
+                    </CameraView>
+                </View>
+            </Modal>
+        </Portal>
+    );
+
     const renderGuide = () => (
         <Portal>
             <Modal visible={showGuide} onDismiss={() => setShowGuide(false)} contentContainerStyle={[styles.modalContainer, { backgroundColor: '#FFFFFF' }]}>
@@ -323,8 +422,8 @@ export default function RegisterScreen() {
                         <Text variant="bodyMedium" style={styles.guideText}>
                             Lütfen aşağıdaki yönergelere göre 5 farklı açıdan fotoğraf çekiniz:{'\n\n'}
                             1. Düz Bakış: Direkt kameraya bakın ve yüzünüzü sabit tutun{'\n'}
-                            2. Sağ Çapraz: Başınızı sağ üst köşeye doğru hafifçe döndürün{'\n'}
-                            3. Sol Çapraz: Başınızı sol üst köşeye doğru hafifçe döndürün{'\n'}
+                            2. Sağ Çapraz: Başınızı hafif sağa döndürün{'\n'}
+                            3. Sol Çapraz: Başınızı hafif sola döndürün{'\n'}
                             4. Sağ Profil: Başınızı sağa doğru 45 derece çevirin{'\n'}
                             5. Sol Profil: Başınızı sola doğru 45 derece çevirin{'\n\n'}
                             Önemli Noktalar:{'\n'}
@@ -345,8 +444,6 @@ export default function RegisterScreen() {
                     </Card.Actions>
                 </Card>
             </Modal>
-
-
         </Portal>
     );
 
@@ -514,323 +611,330 @@ export default function RegisterScreen() {
                     headerShown: false,
                 }}
             />
-            <ScrollView 
-                contentContainerStyle={styles.container}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-            >
-                <View style={styles.logoContainer}>
-                    <Image 
-                        source={require('../../assets/images/iucLogo3.png')}
-                        style={styles.logo}
-                        resizeMode="contain"
-                    />
-                </View>
-
-                <View style={styles.formContainer}>
-                    <View style={styles.segmentedButtonContainer}>
-                        <Button
-                            mode={role === 'student' ? 'contained' : 'outlined'}
-                            onPress={() => setRole('student')}
-                            style={[styles.segmentedButton, role === 'student' && styles.segmentedButtonActive]}
-                            labelStyle={[styles.segmentedButtonText, role === 'student' && styles.segmentedButtonTextActive]}
-                        >
-                            Öğrenci
-                        </Button>
-                        <Button
-                            mode={role === 'academician' ? 'contained' : 'outlined'}
-                            onPress={() => setRole('academician')}
-                            style={[styles.segmentedButton, role === 'academician' && styles.segmentedButtonActive]}
-                            labelStyle={[styles.segmentedButtonText, role === 'academician' && styles.segmentedButtonTextActive]}
-                        >
-                            Akademisyen
-                        </Button>
-                    </View>
-
-                    <View style={styles.inputContainer}>
+            <SafeAreaView style={styles.safeArea}>
+                <ScrollView 
+                    contentContainerStyle={styles.scrollContainer}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                >
+                    <View style={styles.logoContainer}>
                         <Image 
-                            source={require('../../assets/images/user-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Ad"
-                            placeholderTextColor="#B4B4B4"
-                            value={firstName}
-                            onChangeText={setFirstName}
-                            autoCapitalize="words"
+                            source={require('../../assets/images/iucLogo3.png')}
+                            style={styles.logo}
+                            resizeMode="contain"
                         />
                     </View>
 
-                    <View style={styles.inputContainer}>
-                        <Image 
-                            source={require('../../assets/images/user-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Soyad"
-                            placeholderTextColor="#B4B4B4"
-                            value={lastName}
-                            onChangeText={setLastName}
-                            autoCapitalize="words"
-                        />
-                    </View>
-
-                    <View style={styles.inputContainer}>
-                        <Image 
-                            source={require('../../assets/images/mail-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder={`E-posta (${role === 'student' ? '@ogr.iuc.edu.tr' : '@iuc.edu.tr'})`}
-                            placeholderTextColor="#B4B4B4"
-                            value={email}
-                            onChangeText={handleEmailChange}
-                            keyboardType="email-address"
-                            autoCapitalize="none"
-                        />
-                    </View>
-                    {emailError ? (
-                        <Text style={styles.errorText}>{emailError}</Text>
-                    ) : null}
-
-                    <View style={styles.inputContainer}>
-                        <Image 
-                            source={require('../../assets/images/lock-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Şifre"
-                            placeholderTextColor="#B4B4B4"
-                            value={password}
-                            onChangeText={setPassword}
-                            secureTextEntry
-                        />
-                    </View>
-
-                    <View style={[styles.inputContainer, styles.pickerWrapper]}>
-                        <Image 
-                            source={require('../../assets/images/faculty-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={faculty}
-                                onValueChange={(value) => {
-                                    setFaculty(value);
-                                    setDepartment(''); // Fakülte değişince bölümü sıfırla
-                                }}
-                                style={styles.picker}
+                    <View style={styles.formContainer}>
+                        <View style={styles.segmentedButtonContainer}>
+                            <Button
+                                mode={role === 'student' ? 'contained' : 'outlined'}
+                                onPress={() => setRole('student')}
+                                style={[styles.segmentedButton, role === 'student' && styles.segmentedButtonActive]}
+                                labelStyle={[styles.segmentedButtonText, role === 'student' && styles.segmentedButtonTextActive]}
                             >
-                                <Picker.Item label="Fakülte Seçin" value="" color="#B4B4B4" />
-                                {faculties?.map(faculty => (
-                                    <Picker.Item 
-                                        key={faculty.id} 
-                                        label={faculty.name} 
-                                        value={faculty.id.toString()} 
-                                        color="#11263E"
-                                    />
-                                ))}
-                            </Picker>
-                        </View>
-                    </View>
-
-                    <View style={[styles.inputContainer, styles.pickerWrapper]}>
-                        <Image 
-                            source={require('../../assets/images/department-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={department}
-                                onValueChange={setDepartment}
-                                style={styles.picker}
-                                enabled={!!faculty}
+                                Öğrenci
+                            </Button>
+                            <Button
+                                mode={role === 'academician' ? 'contained' : 'outlined'}
+                                onPress={() => setRole('academician')}
+                                style={[styles.segmentedButton, role === 'academician' && styles.segmentedButtonActive]}
+                                labelStyle={[styles.segmentedButtonText, role === 'academician' && styles.segmentedButtonTextActive]}
                             >
-                                <Picker.Item label="Bölüm Seçin" value="" color="#B4B4B4" />
-                                {departments?.map(department => (
-                                    <Picker.Item 
-                                        key={department.id} 
-                                        label={department.name} 
-                                        value={department.id.toString()}
-                                        color="#11263E"
-                                    />
-                                ))}
-                            </Picker>
+                                Akademisyen
+                            </Button>
                         </View>
-                    </View>
 
-                    {role === 'student' && (
+                        <View style={styles.inputContainer}>
+                            <Image 
+                                source={require('../../assets/images/user-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Ad"
+                                placeholderTextColor="#B4B4B4"
+                                value={firstName}
+                                onChangeText={setFirstName}
+                                autoCapitalize="words"
+                            />
+                        </View>
+
+                        <View style={styles.inputContainer}>
+                            <Image 
+                                source={require('../../assets/images/user-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Soyad"
+                                placeholderTextColor="#B4B4B4"
+                                value={lastName}
+                                onChangeText={setLastName}
+                                autoCapitalize="words"
+                            />
+                        </View>
+
+                        <View style={styles.inputContainer}>
+                            <Image 
+                                source={require('../../assets/images/mail-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <TextInput
+                                style={styles.input}
+                                placeholder={`E-posta (${role === 'student' ? '@ogr.iuc.edu.tr' : '@iuc.edu.tr'})`}
+                                placeholderTextColor="#B4B4B4"
+                                value={email}
+                                onChangeText={handleEmailChange}
+                                keyboardType="email-address"
+                                autoCapitalize="none"
+                            />
+                        </View>
+                        {emailError ? (
+                            <Text style={styles.errorText}>{emailError}</Text>
+                        ) : null}
+
+                        <View style={styles.inputContainer}>
+                            <Image 
+                                source={require('../../assets/images/lock-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Şifre"
+                                placeholderTextColor="#B4B4B4"
+                                value={password}
+                                onChangeText={setPassword}
+                                secureTextEntry
+                            />
+                        </View>
+
                         <View style={[styles.inputContainer, styles.pickerWrapper]}>
+                            <Image 
+                                source={require('../../assets/images/faculty-icon.png')} 
+                                style={styles.inputIcon}
+                            />
                             <View style={styles.pickerContainer}>
                                 <Picker
-                                    selectedValue={class_}
-                                    onValueChange={setClass_}
+                                    selectedValue={faculty}
+                                    onValueChange={(value) => {
+                                        setFaculty(value);
+                                        setDepartment(''); // Fakülte değişince bölümü sıfırla
+                                    }}
                                     style={styles.picker}
                                 >
-                                    <Picker.Item label="Sınıf Seçin" value="" color="#B4B4B4" />
-                                    <Picker.Item label="Hazırlık" value="0" color="#11263E" />
-                                    <Picker.Item label="1. Sınıf" value="1" color="#11263E" />
-                                    <Picker.Item label="2. Sınıf" value="2" color="#11263E" />
-                                    <Picker.Item label="3. Sınıf" value="3" color="#11263E" />
-                                    <Picker.Item label="4. Sınıf" value="4" color="#11263E" />
+                                    <Picker.Item label="Fakülte Seçin" value="" color="#B4B4B4" />
+                                    {faculties?.map(faculty => (
+                                        <Picker.Item 
+                                            key={faculty.id} 
+                                            label={faculty.name} 
+                                            value={faculty.id.toString()} 
+                                            color="#11263E"
+                                        />
+                                    ))}
                                 </Picker>
                             </View>
                         </View>
-                    )}
 
-                    <View style={styles.inputContainer}>
-                        <Image 
-                            source={require('../../assets/images/id-icon.png')} 
-                            style={styles.inputIcon}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder={role === 'student' ? 'Öğrenci No (S2023000001)' : 'Akademisyen No (A23000001)'}
-                            placeholderTextColor="#B4B4B4"
-                            value={role === 'student' ? studentNumber : academicianNumber}
-                            onChangeText={role === 'student' ? handleStudentNumberChange : handleAcademicianNumberChange}
-                            autoCapitalize="characters"
-                        />
-                    </View>
-                    {studentNumberError || academicianNumberError ? (
-                        <Text style={styles.errorText}>
-                            {role === 'student' ? studentNumberError : academicianNumberError}
-                        </Text>
-                    ) : null}
-
-                    {role === 'student' && (
-                        <View style={styles.faceImageSection}>
-                            <View style={styles.progressContainer}>
-                                <Text style={styles.progressText}>
-                                    Yüz Fotoğrafları: {faceImages.length}/{REQUIRED_FACE_IMAGES}
-                                </Text>
-                                <ProgressBar 
-                                    progress={faceImages.length / REQUIRED_FACE_IMAGES} 
-                                    color="#D4AF37"
-                                    style={styles.progressBar} 
-                                />
+                        <View style={[styles.inputContainer, styles.pickerWrapper]}>
+                            <Image 
+                                source={require('../../assets/images/department-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <View style={styles.pickerContainer}>
+                                <Picker
+                                    selectedValue={department}
+                                    onValueChange={setDepartment}
+                                    style={styles.picker}
+                                    enabled={!!faculty}
+                                >
+                                    <Picker.Item label="Bölüm Seçin" value="" color="#B4B4B4" />
+                                    {departments?.map(department => (
+                                        <Picker.Item 
+                                            key={department.id} 
+                                            label={department.name} 
+                                            value={department.id.toString()}
+                                            color="#11263E"
+                                        />
+                                    ))}
+                                </Picker>
                             </View>
+                        </View>
 
-                            <Button
-                                mode="contained"
-                                onPress={pickImage}
-                                icon="camera"
-                                style={[styles.button, { backgroundColor: '#D4AF37' }]}
-                                labelStyle={[styles.buttonText, { color: '#003366' }]}
-                                disabled={faceImages.length >= REQUIRED_FACE_IMAGES}
-                            >
-                                {faceImages.length >= REQUIRED_FACE_IMAGES 
-                                    ? 'Tamamlandı' 
-                                    : 'Yüz Fotoğrafı Çek'}
-                            </Button>
+                        {role === 'student' && (
+                            <View style={[styles.inputContainer, styles.pickerWrapper]}>
+                                <View style={styles.pickerContainer}>
+                                    <Picker
+                                        selectedValue={class_}
+                                        onValueChange={setClass_}
+                                        style={styles.picker}
+                                    >
+                                        <Picker.Item label="Sınıf Seçin" value="" color="#B4B4B4" />
+                                        <Picker.Item label="Hazırlık" value="0" color="#11263E" />
+                                        <Picker.Item label="1. Sınıf" value="1" color="#11263E" />
+                                        <Picker.Item label="2. Sınıf" value="2" color="#11263E" />
+                                        <Picker.Item label="3. Sınıf" value="3" color="#11263E" />
+                                        <Picker.Item label="4. Sınıf" value="4" color="#11263E" />
+                                    </Picker>
+                                </View>
+                            </View>
+                        )}
 
-                            {faceImages.length > 0 && (
+                        <View style={styles.inputContainer}>
+                            <Image 
+                                source={require('../../assets/images/id-icon.png')} 
+                                style={styles.inputIcon}
+                            />
+                            <TextInput
+                                style={styles.input}
+                                placeholder={role === 'student' ? 'Öğrenci No (S2023000001)' : 'Akademisyen No (A23000001)'}
+                                placeholderTextColor="#B4B4B4"
+                                value={role === 'student' ? studentNumber : academicianNumber}
+                                onChangeText={role === 'student' ? handleStudentNumberChange : handleAcademicianNumberChange}
+                                autoCapitalize="characters"
+                            />
+                        </View>
+                        {studentNumberError || academicianNumberError ? (
+                            <Text style={styles.errorText}>
+                                {role === 'student' ? studentNumberError : academicianNumberError}
+                            </Text>
+                        ) : null}
+
+                        {role === 'student' && (
+                            <View style={styles.faceImageSection}>
+                                <View style={styles.progressContainer}>
+                                    <Text style={styles.progressText}>
+                                        Yüz Fotoğrafları: {faceImages.length}/{REQUIRED_FACE_IMAGES}
+                                    </Text>
+                                    <ProgressBar 
+                                        progress={faceImages.length / REQUIRED_FACE_IMAGES} 
+                                        color="#D4AF37"
+                                        style={styles.progressBar} 
+                                    />
+                                </View>
+
                                 <Button
                                     mode="contained"
-                                    onPress={() => setShowFaceImages(true)}
-                                    icon="image"
-                                    style={[styles.button, { backgroundColor: '#D4AF37', marginTop: 10 }]}
+                                    onPress={openCamera}
+                                    icon="camera"
+                                    style={[styles.button, { backgroundColor: '#D4AF37' }]}
                                     labelStyle={[styles.buttonText, { color: '#003366' }]}
+                                    disabled={faceImages.length >= REQUIRED_FACE_IMAGES}
                                 >
-                                    Görüntüle
+                                    {faceImages.length >= REQUIRED_FACE_IMAGES 
+                                        ? 'Tüm Fotoğraflar Çekildi' 
+                                        : 'Yüz Fotoğrafı Çek'}
                                 </Button>
-                            )}
 
+                                {faceImages.length > 0 && (
+                                    <Button
+                                        mode="contained"
+                                        onPress={() => setShowFaceImages(true)}
+                                        icon="eye"
+                                        style={[styles.button, { backgroundColor: '#D4AF37', marginTop: 10 }]}
+                                        labelStyle={[styles.buttonText, { color: '#003366' }]}
+                                    >
+                                        Fotoğrafları Görüntüle ({faceImages.length})
+                                    </Button>
+                                )}
+
+                                <Button
+                                    mode="text"
+                                    onPress={() => setShowGuide(true)}
+                                    icon="help-circle"
+                                    style={styles.helpButton}
+                                    labelStyle={{ color: '#D4AF37' }}
+                                >
+                                    Fotoğraf Çekme Rehberi
+                                </Button>
+                            </View>
+                        )}
+
+                        <View style={styles.kvkkContainer}>
+                            <View style={styles.checkboxRow}>
+                                <Checkbox
+                                    status={kvkkAccepted ? 'checked' : 'unchecked'}
+                                    onPress={() => setKvkkAccepted(!kvkkAccepted)}
+                                    color="#D4AF37"
+                                />
+                                <Text style={styles.kvkkText}>
+                                    <Text style={{ color: '#FFFFFF' }}>
+                                        Kişisel verilerimin işlenmesine ilişkin{' '}
+                                    </Text>
+                                    <Text style={styles.kvkkLink} onPress={handleKvkkPress}>
+                                        Aydınlatma Metni
+                                    </Text>
+                                    <Text style={{ color: '#FFFFFF' }}>
+                                        'ni okudum ve kabul ediyorum.
+                                    </Text>
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.buttonContainer}>
                             <Button
-                                mode="text"
-                                onPress={() => setShowGuide(true)}
-                                icon="help-circle"
-                                style={styles.helpButton}
-                                labelStyle={{ color: '#D4AF37' }}
-                            >
-                                Fotoğraf Çekme Rehberi
-                            </Button>
-                        </View>
-                    )}
-
-                    <View style={styles.kvkkContainer}>
-                        <View style={styles.checkboxRow}>
-                            <Checkbox
-                                status={kvkkAccepted ? 'checked' : 'unchecked'}
-                                onPress={() => setKvkkAccepted(!kvkkAccepted)}
-                                color="#D4AF37"
-                            />
-                            <Text style={styles.kvkkText}>
-                                <Text style={{ color: '#FFFFFF' }}>
-                                    Kişisel verilerimin işlenmesine ilişkin{' '}
-                                </Text>
-                                <Text style={styles.kvkkLink} onPress={handleKvkkPress}>
-                                    Aydınlatma Metni
-                                </Text>
-                                <Text style={{ color: '#FFFFFF' }}>
-                                    'ni okudum ve kabul ediyorum.
-                                </Text>
-                            </Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.buttonContainer}>
-                        <Button
-                            mode="contained"
-                            onPress={handleRegister}
-                            loading={loading}
-                            disabled={
-                                loading || 
-                                !email || 
-                                !password || 
-                                !firstName || 
-                                !lastName || 
-                                !faculty || 
-                                !department || 
-                                !kvkkAccepted ||
-                                (role === 'student' && (
-                                    !studentNumber || 
-                                    !class_ || 
-                                    faceImages.length < REQUIRED_FACE_IMAGES ||
-                                    !!emailError ||
-                                    !!studentNumberError
-                                )) ||
-                                (role === 'academician' && (
-                                    !academicianNumber ||
-                                    !!emailError ||
-                                    !!academicianNumberError
-                                ))
-                            }
-                            style={[
-                                styles.button, 
-                                { 
-                                    backgroundColor: '#D4AF37',
-                                    opacity: loading || !email || !password || !firstName || !lastName || !faculty || !department || !kvkkAccepted ||
-                                    (role === 'student' && (!studentNumber || !class_ || faceImages.length < REQUIRED_FACE_IMAGES || !!emailError || !!studentNumberError)) ||
-                                    (role === 'academician' && (!academicianNumber || !!emailError || !!academicianNumberError)) ? 0.5 : 1
+                                mode="contained"
+                                onPress={handleRegister}
+                                loading={loading}
+                                disabled={
+                                    loading || 
+                                    !email || 
+                                    !password || 
+                                    !firstName || 
+                                    !lastName || 
+                                    !faculty || 
+                                    !department || 
+                                    !kvkkAccepted ||
+                                    (role === 'student' && (
+                                        !studentNumber || 
+                                        !class_ || 
+                                        faceImages.length < REQUIRED_FACE_IMAGES ||
+                                        !!emailError ||
+                                        !!studentNumberError
+                                    )) ||
+                                    (role === 'academician' && (
+                                        !academicianNumber ||
+                                        !!emailError ||
+                                        !!academicianNumberError
+                                    ))
                                 }
-                            ]}
-                            labelStyle={[styles.buttonText, { color: '#003366' }]}
-                        >
-                            KAYIT OL
-                        </Button>
+                                style={[
+                                    styles.button, 
+                                    { 
+                                        backgroundColor: '#D4AF37',
+                                        opacity: loading || !email || !password || !firstName || !lastName || !faculty || !department || !kvkkAccepted ||
+                                        (role === 'student' && (!studentNumber || !class_ || faceImages.length < REQUIRED_FACE_IMAGES || !!emailError || !!studentNumberError)) ||
+                                        (role === 'academician' && (!academicianNumber || !!emailError || !!academicianNumberError)) ? 0.5 : 1
+                                    }
+                                ]}
+                                labelStyle={[styles.buttonText, { color: '#003366' }]}
+                            >
+                                KAYIT OL
+                            </Button>
 
-                        <Link href="/(auth)/login" asChild>
-                            <Text style={styles.loginText}>
-                                Zaten hesabınız var mı? Giriş yapın
-                            </Text>
-                        </Link>
+                            <Link href="/(auth)/login" asChild>
+                                <Text style={styles.loginText}>
+                                    Zaten hesabınız var mı? Giriş yapın
+                                </Text>
+                            </Link>
+                        </View>
                     </View>
-                </View>
-            </ScrollView>
+                </ScrollView>
+            </SafeAreaView>
             {renderKvkkModal()}
             {renderGuide()}
             {renderFaceImagesModal()}
+            {renderCameraModal()}
         </>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    safeArea: {
+        flex: 1,
+        backgroundColor: '#11263E',
+    },
+    scrollContainer: {
         flexGrow: 1,
         backgroundColor: '#11263E',
         paddingHorizontal: 20,
@@ -1112,5 +1216,109 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         textAlign: 'center',
     },
-
+    cameraModalContainer: {
+        flex: 1,
+        backgroundColor: '#000000',
+        margin: 0,
+    },
+    cameraContainer: {
+        flex: 1,
+        backgroundColor: '#000000',
+    },
+    cameraViewContainer: {
+        flex: 1,
+        backgroundColor: '#000000',
+    },
+    camera: {
+        flex: 1,
+    },
+    cameraTopBar: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        paddingTop: 50,
+        paddingBottom: 20,
+        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    },
+    cameraTitle: {
+        color: '#FFFFFF',
+        fontSize: 18,
+        fontWeight: 'bold',
+        textAlign: 'center',
+    },
+    centerGuide: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 40,
+    },
+    faceFrame: {
+        width: 250,
+        height: 320,
+        borderWidth: 3,
+        borderColor: '#D4AF37',
+        borderRadius: 20,
+        borderStyle: 'dashed',
+    },
+    instructionText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        marginTop: 20,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        paddingHorizontal: 15,
+        paddingVertical: 8,
+        borderRadius: 10,
+    },
+    cameraBottomBar: {
+        flexDirection: 'column',
+        paddingHorizontal: 20,
+        paddingBottom: 40,
+        backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    },
+    photoPreviewContainer: {
+        marginBottom: 20,
+        maxHeight: 80,
+    },
+    photoPreviewItem: {
+        marginRight: 15,
+        alignItems: 'center',
+    },
+    photoPreview: {
+        width: 60,
+        height: 60,
+        borderRadius: 8,
+        borderWidth: 2,
+        borderColor: '#D4AF37',
+    },
+    photoIndex: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: 'bold',
+        marginTop: 5,
+        textAlign: 'center',
+    },
+    captureButton: {
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: '#FFFFFF',
+        justifyContent: 'center',
+        alignItems: 'center',
+        alignSelf: 'center',
+        borderWidth: 4,
+        borderColor: '#D4AF37',
+    },
+    captureButtonDisabled: {
+        backgroundColor: '#AAAAAA',
+        borderColor: '#666666',
+    },
+    captureButtonInner: {
+        width: 60,
+        height: 60,
+        borderRadius: 30,
+        backgroundColor: '#D4AF37',
+    },
 });
